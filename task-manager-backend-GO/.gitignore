@@ -1,0 +1,26 @@
+# Compiled binaries
+server
+taskflow-server
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Dev SQLite database and its WAL sidecars
+*.db
+*.db-wal
+*.db-shm
+taskmanager.db*
+
+# Test binaries / coverage
+*.test
+*.out
+
+# Environment files — JWT_SECRET lives in one of these on the server
+*.env
+!*.env.example
+
+# go.work is developer-local
+go.work
+go.work.sum

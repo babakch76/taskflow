@@ -1,0 +1,24 @@
+# Caddy config for TaskFlow.
+#
+#   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
+#   sudo nano /etc/caddy/Caddyfile     # <-- put YOUR hostname on the first line
+#   sudo systemctl reload caddy
+#
+# Caddy obtains and renews a Let's Encrypt certificate for this hostname on its
+# own. That is the entire reason for using it here: Android trusts Let's
+# Encrypt out of the box, so the app needs no certificate config, no custom
+# trust anchors, and no weakening of network_security_config.
+#
+# The hostname must be a real DNS name that resolves to this server's public IP.
+# A bare IP address cannot get a certificate. If you don't own a domain, a free
+# DuckDNS subdomain works — see DEPLOYMENT.md.
+
+taskflow-CHANGE-ME.duckdns.org {
+	# The Go server listens on loopback only (BIND_ADDR=127.0.0.1).
+	reverse_proxy 127.0.0.1:8080
+
+	# Keep an access log for demo debugging.
+	log {
+		output file /var/log/caddy/taskflow.log
+	}
+}

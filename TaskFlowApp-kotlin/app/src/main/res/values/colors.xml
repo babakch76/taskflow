@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Only the handful of colours the *platform* needs before Compose takes over
+    (window background / status bar during cold start). Everything the UI
+    actually draws lives in ui/theme/Theme.kt as a Material 3 ColorScheme.
+
+    Values mirror LightColorScheme.background / DarkColorScheme.background so
+    the launch window doesn't flash a different colour than the first frame.
+-->
+<resources>
+    <color name="taskflow_window_background">#FFF8F9FC</color>
+    <color name="ic_launcher_background">#FF7C3AED</color>
+</resources>

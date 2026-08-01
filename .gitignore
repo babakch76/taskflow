@@ -1,0 +1,42 @@
+# ─── Secrets — never commit ────────────────────────────────────────────────
+# SSH private keys. An EC2 key pushed to GitHub is scraped by bots within
+# minutes, and git history keeps it even after you delete the file.
+*.pem
+*.key
+*.ppk
+id_rsa*
+
+# Server environment files (JWT_SECRET and friends)
+.env
+*.env
+!*.env.example
+
+# Android signing
+*.jks
+*.keystore
+
+# ─── Machine-local config ──────────────────────────────────────────────────
+# Contains sdk.dir (a path only valid on one machine) and taskflow.baseUrl
+# (your own backend). Teammates create their own — see TaskFlowApp-kotlin/README.md.
+local.properties
+
+# ─── Databases ─────────────────────────────────────────────────────────────
+# Dev SQLite files, including WAL sidecars.
+*.db
+*.db-wal
+*.db-shm
+
+# ─── IDE ───────────────────────────────────────────────────────────────────
+.idea/
+*.iml
+.vscode/
+
+# ─── OS noise ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── Archives ──────────────────────────────────────────────────────────────
+# Old zipped snapshots of the same source that now lives in this repo.
+*.rar
+*.zip

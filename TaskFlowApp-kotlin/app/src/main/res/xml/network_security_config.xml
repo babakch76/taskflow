@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Network Security Configuration
+
+    base-config stays cleartextTrafficPermitted="false": everything on the open
+    internet must be HTTPS. Cleartext HTTP is allow-listed per host, and only
+    for the local development backend.
+
+    ┌─ PHONE DEMO SETUP ─────────────────────────────────────────────────────┐
+    │ 10.0.2.2 is the emulator's alias for the host machine and works out of │
+    │ the box. A physical device has to reach the dev machine over the LAN,  │
+    │ which needs TWO edits (see README.md):                                 │
+    │                                                                        │
+    │   1. Replace the placeholder IP in the <domain> below with your dev    │
+    │      machine's LAN address (ipconfig / ifconfig — e.g. 192.168.1.42).  │
+    │   2. Put the same address in local.properties:                         │
+    │        taskflow.baseUrl=http://192.168.1.42:8080/                      │
+    │                                                                        │
+    │ Do NOT "fix" this by setting cleartextTrafficPermitted="true" on       │
+    │ base-config — that allows plaintext traffic to every host on the       │
+    │ internet, including anything an attacker can MITM.                     │
+    └────────────────────────────────────────────────────────────────────────┘
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- Android emulator loopback alias for the host machine. -->
+        <domain includeSubdomains="false">10.0.2.2</domain>
+
+        <!-- PLACEHOLDER: replace with your dev machine's LAN IP before a
+             physical-device demo. Must match taskflow.baseUrl in
+             local.properties. -->
+        <domain includeSubdomains="false">192.168.1.42</domain>
+    </domain-config>
+</network-security-config>

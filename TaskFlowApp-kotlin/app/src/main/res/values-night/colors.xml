@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Dark counterpart of values/colors.xml — mirrors DarkColorScheme.background. -->
+<resources>
+    <color name="taskflow_window_background">#FF0F1117</color>
+</resources>

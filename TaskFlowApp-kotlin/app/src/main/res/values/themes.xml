@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    TaskFlow is a Compose-only app: the real theming (Material 3 colour scheme,
+    typography, dynamic colour) is done by TaskFlowTheme in ui/theme/Theme.kt.
+
+    This XML theme exists purely for the things the *platform* reads before any
+    Compose code runs: the launch window background and the system bar treatment.
+    It deliberately inherits from the framework's own Material theme rather than
+    com.google.android.material's Theme.Material3.* — pulling in the whole
+    Material Views library just to satisfy a manifest attribute would add a
+    dependency the app never uses.
+-->
+<resources>
+    <style name="Theme.TaskFlow" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/taskflow_window_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <!-- Light window => dark status bar icons. Overridden in values-night. -->
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

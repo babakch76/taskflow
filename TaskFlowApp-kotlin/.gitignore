@@ -1,0 +1,27 @@
+# Gradle / Android build output
+.gradle/
+build/
+app/build/
+captures/
+.cxx/
+
+# Machine-local — see README.md for the two keys it needs
+local.properties
+
+# IDE
+.idea/
+*.iml
+local.log
+
+# Build artifacts
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# Signing
+*.jks
+*.keystore
+
+# Keep the wrapper: it is what makes the build reproducible for teammates.
+# (gradle-wrapper.jar is intentionally NOT ignored.)

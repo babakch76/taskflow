@@ -1,0 +1,53 @@
+# systemd unit for the TaskFlow API server.
+#
+#   sudo cp deploy/taskflow.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now taskflow
+#
+# See DEPLOYMENT.md for the full walkthrough (user, directories, env file).
+
+[Unit]
+Description=TaskFlow API server
+Documentation=https://github.com/your-org/taskflow
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=taskflow
+Group=taskflow
+WorkingDirectory=/opt/taskflow
+ExecStart=/opt/taskflow/taskflow-server
+
+# Bind to loopback only: Caddy terminates TLS and proxies to us. Nothing
+# outside the box should ever be able to reach the cleartext port.
+Environment=BIND_ADDR=127.0.0.1
+Environment=PORT=8080
+# Keep the database off /opt so a redeploy (which overwrites the binary)
+# can never take the data with it.
+Environment=DB_PATH=/var/lib/taskflow/taskmanager.db
+
+# JWT_SECRET lives here, not in this file — this one is world-readable.
+EnvironmentFile=/etc/taskflow/taskflow.env
+
+Restart=on-failure
+RestartSec=5s
+
+# --- Hardening -------------------------------------------------------------
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+# ProtectSystem=strict makes everything read-only; the database directory is
+# the one exception the service needs.
+ReadWritePaths=/var/lib/taskflow
+
+[Install]
+WantedBy=multi-user.target
