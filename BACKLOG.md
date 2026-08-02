@@ -108,19 +108,17 @@ models already carry `description`, so nothing to add there.
 
 ### UX debt (no crash, but hurts flow)
 
-- **Tap-to-cycle status is undiscoverable and error-prone.** Tapping a task
-  card silently advances todo → in_progress → done; nothing signals it, and a
-  mis-tap "completes" a task with no undo. Replace with an explicit control
-  (status chip opens a menu, or checkbox = done) or add undo via snackbar.
+- **DONE (round 2)** ~~Tap-to-cycle status is undiscoverable and error-prone.~~
+  A tap now opens the task detail sheet; status is an explicit chip row there.
 - **DONE (round 1)** ~~Destructive actions are one tap, no confirm, no undo.~~
   Task delete now confirms. (Undo would need an undelete endpoint — deliberately
   not faked with a snackbar.)  Original note: Task delete
   especially — the trash icon sits beside every card. Snackbar-with-Undo is the
   Material pattern; confirmation dialog is the cheap stopgap.
-- **No task detail/edit screen.** Title/description can never be changed after
-  creation (the API supports it); descriptions truncate at 2 lines with no way
-  to read the rest. Tapping a card should open a detail sheet — which also
-  frees the tap gesture from status-cycling.
+- **DONE (round 2)** ~~No task detail/edit screen.~~ `TaskDetailSheet` gives
+  editable title/description (staged, saved with a button), explicit status and
+  assignee, created/updated stamps, and delete. It is also where the due-date
+  picker belongs when that work starts.
 - **DONE (round 1)** ~~Activity feed leaks developer strings.~~ Original note: `detail` renders raw
   `assigned_to=cleared`, `status=in_progress`, `2 task(s) → done`. Humanise
   client-side ("cleared the assignee", "moved 2 tasks to Done").

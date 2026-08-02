@@ -164,6 +164,25 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
         }
     }
 
+    /**
+     * Edit a task's title and/or description.
+     *
+     * Pass null for a field that didn't change — it stays out of the JSON, so
+     * this can't clobber a concurrent edit to the other field. If nothing
+     * changed, no request is made at all: an empty patch would serialise to
+     * `{}` and the backend rejects that with "no fields to update".
+     */
+    fun updateTaskText(taskId: String, title: String?, description: String?) {
+        if (title == null && description == null) return
+        runAction(successMessage = "Task updated") {
+            api.updateTask(
+                groupId,
+                taskId,
+                UpdateTaskRequest(title = title, description = description),
+            )
+        }
+    }
+
     fun setTaskStatus(taskId: String, status: String) {
         // Only `status` is set; assignedTo/dueDate stay Patchable.Absent and are
         // therefore omitted from the JSON entirely, so this cannot disturb the

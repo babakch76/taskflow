@@ -76,6 +76,11 @@ fun GroupDetailScreen(
     var selectedTasks by remember { mutableStateOf(setOf<String>()) }
     // Task pending deletion — deleting is irreversible, so it goes via a confirm.
     var taskToDelete by remember { mutableStateOf<Task?>(null) }
+    // Detail sheet holds an *id*, not a Task. The Task is looked up from state
+    // on each recomposition, so an edit (ours or a teammate's) is reflected
+    // instead of the sheet showing the snapshot it opened with.
+    var detailTaskId by remember { mutableStateOf<String?>(null) }
+    val detailTask = detailTaskId?.let { id -> state.tasks.firstOrNull { it.id == id } }
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -238,14 +243,7 @@ fun GroupDetailScreen(
                                 selectedTasks = if (id in selectedTasks) selectedTasks - id
                                 else selectedTasks + id
                             },
-                            onCycleStatus = { task ->
-                                val next = TASK_STATUSES[
-                                    (TASK_STATUSES.indexOf(task.status) + 1) % TASK_STATUSES.size
-                                ]
-                                viewModel.setTaskStatus(task.id, next)
-                            },
-                            onUnassign = { viewModel.setTaskAssignee(it.id, null) },
-                            onDelete = { taskToDelete = it },
+                            onOpenDetail = { detailTaskId = it.id },
                             onCreate = { showCreateTask = true },
                         )
 
@@ -255,6 +253,27 @@ fun GroupDetailScreen(
                     }
                 }
             }
+        }
+    }
+
+    // Detail sheet. Closes itself if the task disappears — deleted here, or by
+    // a teammate while it was open.
+    detailTask?.let { task ->
+        TaskDetailSheet(
+            task = task,
+            members = state.members,
+            onDismiss = { detailTaskId = null },
+            onSaveText = { title, description ->
+                viewModel.updateTaskText(task.id, title, description)
+            },
+            onSetStatus = { viewModel.setTaskStatus(task.id, it) },
+            onSetAssignee = { viewModel.setTaskAssignee(task.id, it) },
+            onDelete = { taskToDelete = task },
+        )
+    }
+    LaunchedEffect(detailTaskId, state.tasks) {
+        if (detailTaskId != null && state.tasks.none { it.id == detailTaskId }) {
+            detailTaskId = null
         }
     }
 
@@ -293,6 +312,9 @@ fun GroupDetailScreen(
                 TextButton(onClick = {
                     viewModel.deleteTask(task.id)
                     taskToDelete = null
+                    // If the confirm came from inside the detail sheet, that
+                    // sheet is now showing a task that no longer exists.
+                    detailTaskId = null
                 }) {
                     Text("Delete", color = MaterialTheme.colorScheme.error)
                 }
@@ -469,9 +491,7 @@ private fun TaskList(
     members: List<MemberInfo>,
     selected: Set<String>,
     onToggleSelect: (String) -> Unit,
-    onCycleStatus: (Task) -> Unit,
-    onUnassign: (Task) -> Unit,
-    onDelete: (Task) -> Unit,
+    onOpenDetail: (Task) -> Unit,
     onCreate: () -> Unit,
 ) {
     if (tasks.isEmpty()) {
@@ -505,14 +525,23 @@ private fun TaskList(
                 isSelected = task.id in selected,
                 anySelected = selected.isNotEmpty(),
                 onToggleSelect = { onToggleSelect(task.id) },
-                onCycleStatus = { onCycleStatus(task) },
-                onUnassign = { onUnassign(task) },
-                onDelete = { onDelete(task) },
+                onOpenDetail = { onOpenDetail(task) },
             )
         }
     }
 }
 
+/**
+ * One row in the task list.
+ *
+ * A tap opens the detail sheet. It used to cycle the status in place, which was
+ * undiscoverable — nothing on the card said it was tappable, let alone what
+ * tapping would do — and a mis-tap silently marked work as done with no undo.
+ * Editing now happens somewhere the user can see what they're changing.
+ *
+ * Delete lives in the sheet too: a destructive control on every row of a list
+ * is a lot of accidental-tap surface for an action with no undo.
+ */
 @Composable
 private fun TaskCard(
     task: Task,
@@ -520,16 +549,14 @@ private fun TaskCard(
     isSelected: Boolean,
     anySelected: Boolean,
     onToggleSelect: () -> Unit,
-    onCycleStatus: () -> Unit,
-    onUnassign: () -> Unit,
-    onDelete: () -> Unit,
+    onOpenDetail: () -> Unit,
 ) {
     ElevatedCard(
         modifier = Modifier
             .fillMaxWidth()
             // Once anything is selected, a plain tap extends the selection
-            // rather than acting on one task — standard multi-select behaviour.
-            .clickable { if (anySelected) onToggleSelect() else onCycleStatus() },
+            // rather than opening one task — standard multi-select behaviour.
+            .clickable { if (anySelected) onToggleSelect() else onOpenDetail() },
         colors = CardDefaults.elevatedCardColors(
             containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer
             else MaterialTheme.colorScheme.surface,
@@ -539,7 +566,7 @@ private fun TaskCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 8.dp, top = 8.dp, end = 8.dp, bottom = 8.dp),
+                .padding(start = 8.dp, top = 8.dp, end = 12.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Checkbox(checked = isSelected, onCheckedChange = { onToggleSelect() })
@@ -568,23 +595,158 @@ private fun TaskCard(
                 ) {
                     StatusChip(task.status)
                     if (assigneeName != null) {
-                        AssistChip(
-                            onClick = onUnassign,
-                            label = { Text(assigneeName, style = MaterialTheme.typography.labelSmall) },
-                            trailingIcon = {
-                                Icon(Icons.Default.Close, "Unassign", Modifier.size(14.dp))
-                            },
+                        Text(
+                            text = assigneeName,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
             }
 
-            IconButton(onClick = onDelete) {
-                Icon(
-                    Icons.Default.Delete,
-                    contentDescription = "Delete task",
-                    tint = MaterialTheme.colorScheme.error.copy(alpha = .8f),
+            // Affordance that the row leads somewhere.
+            Text(
+                text = "›",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .35f),
+            )
+        }
+    }
+}
+
+/**
+ * Detail view for a single task, as a modal bottom sheet.
+ *
+ * This is where a task is actually read and edited: the full description
+ * instead of two truncated lines, an explicit status control instead of a
+ * hidden tap-to-cycle, assignment, and delete.
+ *
+ * Text edits are staged and saved with a button, because typing a title should
+ * not fire a request per keystroke. Status and assignee apply immediately —
+ * they're single, cheap, obviously-reversible choices.
+ *
+ * [task] is re-derived from the ViewModel's list by the caller, so the sheet
+ * reflects a teammate's concurrent change rather than a stale snapshot taken
+ * when it opened.
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+private fun TaskDetailSheet(
+    task: Task,
+    members: List<MemberInfo>,
+    onDismiss: () -> Unit,
+    onSaveText: (title: String?, description: String?) -> Unit,
+    onSetStatus: (String) -> Unit,
+    onSetAssignee: (String?) -> Unit,
+    onDelete: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    // Re-seed the draft when a different task is opened, or when this one is
+    // changed underneath us by someone else.
+    var draftTitle by remember(task.id, task.title) { mutableStateOf(task.title) }
+    var draftDescription by remember(task.id, task.description) { mutableStateOf(task.description) }
+
+    val titleChanged = draftTitle.trim() != task.title && draftTitle.isNotBlank()
+    val descriptionChanged = draftDescription.trim() != task.description
+    val dirty = titleChanged || descriptionChanged
+
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            OutlinedTextField(
+                value = draftTitle,
+                onValueChange = { draftTitle = it },
+                label = { Text("Title") },
+                isError = draftTitle.isBlank(),
+                supportingText = if (draftTitle.isBlank()) {
+                    { Text("Title can't be empty") }
+                } else null,
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            OutlinedTextField(
+                value = draftDescription,
+                onValueChange = { draftDescription = it },
+                label = { Text("Description") },
+                placeholder = { Text("Add more detail…") },
+                minLines = 3,
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            AnimatedVisibility(visible = dirty) {
+                Button(
+                    onClick = {
+                        onSaveText(
+                            draftTitle.trim().takeIf { titleChanged },
+                            draftDescription.trim().takeIf { descriptionChanged },
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Save changes") }
+            }
+
+            HorizontalDivider()
+
+            Text("Status", style = MaterialTheme.typography.labelLarge)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TASK_STATUSES.forEach { status ->
+                    FilterChip(
+                        selected = task.status == status,
+                        onClick = { if (task.status != status) onSetStatus(status) },
+                        label = { Text(statusLabel(status)) },
+                    )
+                }
+            }
+
+            Text("Assigned to", style = MaterialTheme.typography.labelLarge)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                FilterChip(
+                    selected = task.assignedTo == null,
+                    onClick = { if (task.assignedTo != null) onSetAssignee(null) },
+                    label = { Text("Nobody") },
                 )
+                members.forEach { member ->
+                    FilterChip(
+                        selected = task.assignedTo == member.id,
+                        onClick = { if (task.assignedTo != member.id) onSetAssignee(member.id) },
+                        label = { Text(member.username) },
+                    )
+                }
+            }
+
+            HorizontalDivider()
+
+            // updated_at is null for rows written before that column existed,
+            // hence the fallback rather than an empty line.
+            Text(
+                text = buildString {
+                    append("Created ${formatStamp(task.createdAt)}")
+                    task.updatedAt?.let { append("  ·  updated ${formatStamp(it)}") }
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            OutlinedButton(
+                onClick = onDelete,
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Default.Delete, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Delete task")
             }
         }
     }
@@ -1018,6 +1180,16 @@ private fun InviteCodeDialog(code: String, onDismiss: () -> Unit) {
 // ═══════════════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════════════
+
+/** Absolute date for the detail sheet, where "23h ago" is less useful than a date. */
+private fun formatStamp(time: OffsetDateTime?): String {
+    if (time == null) return "unknown"
+    return try {
+        time.format(DateTimeFormatter.ofPattern("d MMM yyyy, HH:mm"))
+    } catch (_: Exception) {
+        "unknown"
+    }
+}
 
 /** Coarse "how long ago" for the activity feed. */
 private fun relativeTime(time: OffsetDateTime?): String {
