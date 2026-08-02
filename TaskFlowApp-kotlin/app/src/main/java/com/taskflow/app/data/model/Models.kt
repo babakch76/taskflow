@@ -39,6 +39,13 @@ data class GroupWithProgress(
     @SerializedName("done_tasks")
     val doneTasks: Int = 0,
     val progress: Double = 0.0,
+    /**
+     * The signed-in user's own role in this group: "owner", "admin" or
+     * "member". Returned by the backend so the client can gate its UI without
+     * fetching the member list and working out which row is itself.
+     */
+    @SerializedName("my_role")
+    val myRole: String = "member",
 )
 
 data class Task(
@@ -195,6 +202,16 @@ data class BulkUpdateTaskStatusRequest(
     @SerializedName("task_ids")
     val taskIds: List<String>,
     val status: String,   // "todo", "in_progress", "done"
+)
+
+/**
+ * Body of PATCH /groups/{group_id}/members/{user_id}/role — owner only.
+ *
+ * Only "admin" and "member" are accepted; "owner" is not settable, since
+ * ownership transfer is out of scope.
+ */
+data class UpdateMemberRoleRequest(
+    val role: String,
 )
 
 data class InviteByUsernameRequest(

@@ -82,7 +82,7 @@ fun LoginScreen(
 
                 val body = response.body()
                 if (response.isSuccessful && body != null) {
-                    tokenManager.saveToken(body.token)
+                    tokenManager.saveSession(body.token, body.user.id)
                     successMessage = "Welcome, ${body.user.username}!"
                     onLoginSuccess()
                 } else if (response.isSuccessful) {

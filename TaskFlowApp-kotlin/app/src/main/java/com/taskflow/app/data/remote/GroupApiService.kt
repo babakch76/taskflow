@@ -31,6 +31,19 @@ interface GroupApiService {
     suspend fun listMembers(@Path("group_id") groupId: String): Response<List<MemberInfo>>
 
     /**
+     * Promote a member to manager ("admin") or demote them back to "member".
+     *
+     * Owner only — the backend answers 403 for anyone else, and refuses to
+     * change the owner's own role at all.
+     */
+    @PATCH("groups/{group_id}/members/{user_id}/role")
+    suspend fun updateMemberRole(
+        @Path("group_id") groupId: String,
+        @Path("user_id") userId: String,
+        @Body request: UpdateMemberRoleRequest,
+    ): Response<MessageResponse>
+
+    /**
      * Remove the caller's own membership.
      *
      * Deletes the group outright if the caller was its last member. Returns

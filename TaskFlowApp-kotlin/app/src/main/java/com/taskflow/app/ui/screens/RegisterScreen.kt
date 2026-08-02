@@ -87,7 +87,7 @@ fun RegisterScreen(
                 val body = response.body()
                 if (response.isSuccessful && body != null) {
                     // /auth/register returns a token too — no second login needed.
-                    tokenManager.saveToken(body.token)
+                    tokenManager.saveSession(body.token, body.user.id)
                     successMessage = "Account created. Welcome, ${body.user.username}!"
                     onRegisterSuccess()
                 } else if (response.isSuccessful) {

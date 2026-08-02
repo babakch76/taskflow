@@ -13,7 +13,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
@@ -33,16 +35,26 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.taskflow.app.TaskFlowApp
 import com.taskflow.app.data.model.ActivityEvent
 import com.taskflow.app.data.model.MemberInfo
 import com.taskflow.app.data.model.Task
 import kotlinx.coroutines.delay
 import java.time.Duration
+import java.time.Instant
+import java.time.LocalDate
 import java.time.OffsetDateTime
+import java.time.YearMonth
+import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import java.time.format.TextStyle
+import java.time.temporal.WeekFields
+import java.util.Locale
 
 /** How often the activity feed is polled while this screen is on screen. */
 private const val ACTIVITY_POLL_MILLIS = 5_000L
@@ -52,8 +64,9 @@ private val TASK_STATUSES = listOf("todo", "in_progress", "done")
 /**
  * Group detail: tasks, activity feed, members and invites for one group.
  *
- * Three tabs rather than one long scroll, because the activity feed is
- * append-only and would otherwise push the task list off screen.
+ * Four tabs rather than one long scroll: the activity feed is append-only and
+ * would otherwise push the task list off screen, and the calendar needs the
+ * full width to be readable.
  *
  * @param groupId From the navigation arguments.
  * @param onBack Returns to the dashboard. Also called after leaving the group,
@@ -82,6 +95,13 @@ fun GroupDetailScreen(
     // instead of the sheet showing the snapshot it opened with.
     var detailTaskId by remember { mutableStateOf<String?>(null) }
     val detailTask = detailTaskId?.let { id -> state.tasks.firstOrNull { it.id == id } }
+
+    // Which member row is "me" — needed so the owner isn't offered a demote
+    // button on their own row.
+    val context = LocalContext.current
+    val myUserId = remember {
+        (context.applicationContext as? TaskFlowApp)?.tokenManager?.getUserId()
+    }
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -212,7 +232,13 @@ fun GroupDetailScreen(
                             },
                         )
                     } else {
-                        TabRow(selectedTabIndex = selectedTab) {
+                        // Scrollable, not fixed: four labels with counts don't
+                        // fit a phone's width, and a fixed TabRow wraps
+                        // "Members (4)" onto two lines rather than shrinking.
+                        ScrollableTabRow(
+                            selectedTabIndex = selectedTab,
+                            edgePadding = 12.dp,
+                        ) {
                             Tab(
                                 selected = selectedTab == 0,
                                 onClick = { selectedTab = 0 },
@@ -221,11 +247,16 @@ fun GroupDetailScreen(
                             Tab(
                                 selected = selectedTab == 1,
                                 onClick = { selectedTab = 1 },
-                                text = { Text("Activity") },
+                                text = { Text("Calendar") },
                             )
                             Tab(
                                 selected = selectedTab == 2,
                                 onClick = { selectedTab = 2 },
+                                text = { Text("Activity") },
+                            )
+                            Tab(
+                                selected = selectedTab == 3,
+                                onClick = { selectedTab = 3 },
                                 text = { Text("Members (${state.members.size})") },
                             )
                         }
@@ -249,9 +280,22 @@ fun GroupDetailScreen(
                             onCreate = { showCreateTask = true },
                         )
 
-                        1 -> ActivityList(state.activity)
+                        1 -> CalendarTab(
+                            tasks = state.tasks,
+                            members = state.members,
+                            onOpenDetail = { detailTaskId = it.id },
+                        )
 
-                        2 -> MemberList(state.members)
+                        2 -> ActivityList(state.activity)
+
+                        3 -> MemberList(
+                            members = state.members,
+                            myUserId = myUserId,
+                            amOwner = state.group?.myRole == ROLE_OWNER,
+                            onSetRole = { member, role ->
+                                viewModel.setMemberRole(member.id, role, member.username)
+                            },
+                        )
                     }
                     }
                 }
@@ -265,12 +309,14 @@ fun GroupDetailScreen(
         TaskDetailSheet(
             task = task,
             members = state.members,
+            canEditDeadline = canManageDeadlines(state.group?.myRole),
             onDismiss = { detailTaskId = null },
             onSaveText = { title, description ->
                 viewModel.updateTaskText(task.id, title, description)
             },
             onSetStatus = { viewModel.setTaskStatus(task.id, it) },
             onSetAssignee = { viewModel.setTaskAssignee(task.id, it) },
+            onSetDueDate = { viewModel.setTaskDueDate(task.id, it) },
             onDelete = { taskToDelete = task },
         )
     }
@@ -659,13 +705,27 @@ private fun TaskCard(
 private fun TaskDetailSheet(
     task: Task,
     members: List<MemberInfo>,
+    canEditDeadline: Boolean,
     onDismiss: () -> Unit,
     onSaveText: (title: String?, description: String?) -> Unit,
     onSetStatus: (String) -> Unit,
     onSetAssignee: (String?) -> Unit,
+    onSetDueDate: (String?) -> Unit,
     onDelete: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var showDatePicker by remember { mutableStateOf(false) }
+
+    if (showDatePicker) {
+        DueDatePickerDialog(
+            initial = task.dueDate,
+            onDismiss = { showDatePicker = false },
+            onPicked = { iso ->
+                showDatePicker = false
+                onSetDueDate(iso)
+            },
+        )
+    }
 
     // Re-seed the draft when a different task is opened, or when this one is
     // changed underneath us by someone else.
@@ -751,6 +811,54 @@ private fun TaskDetailSheet(
 
             HorizontalDivider()
 
+            // ─── Deadline ───
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Deadline", style = MaterialTheme.typography.labelLarge)
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = task.dueDate?.let { formatDueDate(it) } ?: "No deadline",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = when {
+                            task.dueDate == null -> MaterialTheme.colorScheme.onSurfaceVariant
+                            isOverdue(task) -> MaterialTheme.colorScheme.error
+                            else -> MaterialTheme.colorScheme.onSurface
+                        },
+                    )
+                }
+                if (canEditDeadline) {
+                    Row {
+                        if (task.dueDate != null) {
+                            IconButton(onClick = { onSetDueDate(null) }) {
+                                Icon(Icons.Default.Close, contentDescription = "Remove deadline")
+                            }
+                        }
+                        IconButton(onClick = { showDatePicker = true }) {
+                            Icon(
+                                Icons.Default.CalendarMonth,
+                                contentDescription = if (task.dueDate == null) "Set deadline"
+                                else "Change deadline",
+                            )
+                        }
+                    }
+                }
+            }
+            if (!canEditDeadline) {
+                // Say why the controls aren't there, rather than leaving a
+                // read-only field that looks broken.
+                Text(
+                    text = "Only the group owner or a manager can change deadlines.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            HorizontalDivider()
+
             // updated_at is null for rows written before that column existed,
             // hence the fallback rather than an empty line.
             Text(
@@ -802,6 +910,241 @@ private fun statusLabel(status: String) = when (status) {
     "in_progress" -> "In progress"
     "done" -> "Done"
     else -> status
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Calendar
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Month view of the group's deadlines.
+ *
+ * A month grid rather than an agenda list, because the question this answers is
+ * "how is the work spread out" — where the crunch weeks are, which is exactly
+ * what a list of dates in order hides.
+ *
+ * Days carry a dot per task, coloured by state: overdue in error, done in
+ * tertiary, otherwise primary. Tapping a day lists its tasks underneath.
+ * Tasks with no deadline aren't on the calendar at all, so their count is
+ * reported at the bottom instead of being silently dropped.
+ */
+@Composable
+private fun CalendarTab(
+    tasks: List<Task>,
+    members: List<MemberInfo>,
+    onOpenDetail: (Task) -> Unit,
+) {
+    val zone = remember { ZoneId.systemDefault() }
+    val today = remember { LocalDate.now() }
+    var visibleMonth by remember { mutableStateOf(YearMonth.from(today)) }
+    var selectedDay by remember { mutableStateOf<LocalDate?>(null) }
+
+    // Deadline day (in the viewer's zone) → tasks due that day.
+    val byDay = remember(tasks, zone) {
+        tasks.filter { it.dueDate != null }
+            .groupBy { it.dueDate!!.atZoneSameInstant(zone).toLocalDate() }
+    }
+    val undated = remember(tasks) { tasks.count { it.dueDate == null } }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp)
+            .padding(bottom = 88.dp),
+    ) {
+        // ─── Month switcher ───
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            IconButton(onClick = { visibleMonth = visibleMonth.minusMonths(1) }) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Previous month")
+            }
+            Text(
+                text = visibleMonth.format(DateTimeFormatter.ofPattern("MMMM yyyy")),
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+            )
+            IconButton(onClick = { visibleMonth = visibleMonth.plusMonths(1) }) {
+                Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Next month")
+            }
+        }
+
+        // ─── Weekday headings ───
+        // Starts on the locale's own first day, so this reads correctly whether
+        // the user's week begins on Monday or Sunday.
+        val firstDayOfWeek = remember { WeekFields.of(Locale.getDefault()).firstDayOfWeek }
+        Row(modifier = Modifier.fillMaxWidth()) {
+            repeat(7) { i ->
+                Text(
+                    text = firstDayOfWeek.plus(i.toLong())
+                        .getDisplayName(TextStyle.SHORT, Locale.getDefault()),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+
+        Spacer(Modifier.height(4.dp))
+
+        // ─── Day grid ───
+        val firstOfMonth = visibleMonth.atDay(1)
+        // How many blanks before the 1st, given where this locale's week starts.
+        val leadingBlanks = ((firstOfMonth.dayOfWeek.value - firstDayOfWeek.value) + 7) % 7
+        val totalCells = leadingBlanks + visibleMonth.lengthOfMonth()
+        val rows = (totalCells + 6) / 7
+
+        repeat(rows) { row ->
+            Row(modifier = Modifier.fillMaxWidth()) {
+                repeat(7) { col ->
+                    val cell = row * 7 + col
+                    val dayOfMonth = cell - leadingBlanks + 1
+                    if (dayOfMonth < 1 || dayOfMonth > visibleMonth.lengthOfMonth()) {
+                        Spacer(Modifier.weight(1f).height(48.dp))
+                    } else {
+                        val date = visibleMonth.atDay(dayOfMonth)
+                        CalendarDayCell(
+                            date = date,
+                            tasksDue = byDay[date].orEmpty(),
+                            isToday = date == today,
+                            isSelected = date == selectedDay,
+                            onClick = { selectedDay = if (selectedDay == date) null else date },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        HorizontalDivider()
+        Spacer(Modifier.height(12.dp))
+
+        // ─── Selected day, or a summary of the month ───
+        val selected = selectedDay
+        if (selected == null) {
+            val monthTasks = byDay.filterKeys { YearMonth.from(it) == visibleMonth }
+                .values.flatten()
+            Text(
+                text = when {
+                    monthTasks.isEmpty() -> "Nothing due in ${visibleMonth.format(DateTimeFormatter.ofPattern("MMMM"))}."
+                    monthTasks.size == 1 -> "1 task due this month. Tap a day to see it."
+                    else -> "${monthTasks.size} tasks due this month. Tap a day to see them."
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            Text(
+                text = selected.format(DateTimeFormatter.ofPattern("EEEE d MMMM")),
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+            )
+            Spacer(Modifier.height(8.dp))
+            val dayTasks = byDay[selected].orEmpty()
+            if (dayTasks.isEmpty()) {
+                Text(
+                    text = "Nothing due on this day.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                dayTasks.forEach { task ->
+                    TaskCard(
+                        task = task,
+                        assigneeName = members.firstOrNull { it.id == task.assignedTo }?.username,
+                        isSelected = false,
+                        anySelected = false,
+                        onToggleSelect = { onOpenDetail(task) },
+                        onOpenDetail = { onOpenDetail(task) },
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+            }
+        }
+
+        if (undated > 0) {
+            Spacer(Modifier.height(16.dp))
+            Text(
+                text = if (undated == 1) "1 task has no deadline and isn't shown here."
+                else "$undated tasks have no deadline and aren't shown here.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .8f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun CalendarDayCell(
+    date: LocalDate,
+    tasksDue: List<Task>,
+    isToday: Boolean,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val hasOverdue = tasksDue.any { isOverdue(it) }
+
+    Box(
+        modifier = modifier
+            .height(48.dp)
+            .padding(2.dp)
+            .clip(MaterialTheme.shapes.small)
+            .background(
+                when {
+                    isSelected -> MaterialTheme.colorScheme.primaryContainer
+                    isToday -> MaterialTheme.colorScheme.surfaceVariant
+                    else -> androidx.compose.ui.graphics.Color.Transparent
+                }
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = date.dayOfMonth.toString(),
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
+                ),
+                color = if (isToday) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurface,
+            )
+            if (tasksDue.isNotEmpty()) {
+                Spacer(Modifier.height(2.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    // Cap the dots — a day with nine deadlines should look busy,
+                    // not overflow its cell.
+                    tasksDue.take(3).forEach { task ->
+                        Box(
+                            modifier = Modifier
+                                .size(5.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    when {
+                                        task.status == "done" -> MaterialTheme.colorScheme.tertiary
+                                        isOverdue(task) -> MaterialTheme.colorScheme.error
+                                        else -> MaterialTheme.colorScheme.primary
+                                    }
+                                )
+                        )
+                    }
+                    if (tasksDue.size > 3) {
+                        Text(
+                            text = "+",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (hasOverdue) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -876,6 +1219,7 @@ private fun describeEvent(e: ActivityEvent): String = when (e.eventType) {
     "member_joined" -> "${e.actorUsername} joined the group"
     "member_left" -> "${e.actorUsername} left the group"
     "invite_accepted" -> "${e.actorUsername} accepted an invite"
+    "member_role_changed" -> "${e.actorUsername} changed a member's role"
     else -> "${e.actorUsername}: ${e.eventType}"
 }
 
@@ -898,6 +1242,12 @@ private fun humaniseDetail(e: ActivityEvent): String? {
 
     return when (e.eventType) {
         "task_created", "task_deleted" -> detail
+
+        // "username → admin" from the backend; "admin" is the stored value for
+        // what users are shown as "Manager".
+        "member_role_changed" -> detail
+            .replace(" → admin", " is now a manager")
+            .replace(" → member", " is now a member")
 
         "task_updated" -> detail
             .split(",")
@@ -947,8 +1297,20 @@ private fun eventColor(type: String) = when (type) {
 // Members
 // ═══════════════════════════════════════════════════════════════
 
+/**
+ * Group roster, with promote/demote for the owner.
+ *
+ * Only the owner sees the role controls, and never on their own row — the
+ * backend refuses both cases anyway, so showing the buttons would just be
+ * offering an action that always fails.
+ */
 @Composable
-private fun MemberList(members: List<MemberInfo>) {
+private fun MemberList(
+    members: List<MemberInfo>,
+    myUserId: String?,
+    amOwner: Boolean,
+    onSetRole: (MemberInfo, String) -> Unit,
+) {
     LazyColumn(
         contentPadding = PaddingValues(
             start = 16.dp,
@@ -960,45 +1322,87 @@ private fun MemberList(members: List<MemberInfo>) {
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         items(members, key = { it.id }) { member ->
+            val isMe = member.id == myUserId
+            val canChangeThisRole = amOwner && !isMe && member.role != ROLE_OWNER
+
             ElevatedCard(modifier = Modifier.fillMaxWidth()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = .15f)),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = member.username.take(1).uppercase(),
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primary.copy(alpha = .15f)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = member.username.take(1).uppercase(),
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (isMe) "${member.username} (you)" else member.username,
+                                style = MaterialTheme.typography.titleSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                ),
+                            )
+                            Text(
+                                text = member.email,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        RoleChip(member.role)
                     }
-                    Spacer(Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = member.username,
-                            style = MaterialTheme.typography.titleSmall.copy(
-                                fontWeight = FontWeight.Bold,
-                            ),
-                        )
-                        Text(
-                            text = member.email,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+
+                    if (canChangeThisRole) {
+                        Spacer(Modifier.height(8.dp))
+                        if (member.role == ROLE_ADMIN) {
+                            OutlinedButton(
+                                onClick = { onSetRole(member, ROLE_MEMBER) },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text("Remove manager role") }
+                        } else {
+                            FilledTonalButton(
+                                onClick = { onSetRole(member, ROLE_ADMIN) },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text("Make manager") }
+                        }
                     }
-                    RoleChip(member.role)
                 }
             }
         }
+
+        if (amOwner) {
+            item(key = "role-note") {
+                Text(
+                    text = "Managers can set and remove task deadlines. Only you can " +
+                        "change who is a manager.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+        }
     }
+}
+
+/**
+ * Human label for a role.
+ *
+ * The backend stores "admin" — a value fixed by a CHECK constraint that SQLite
+ * cannot alter in place — but users are shown "Manager" everywhere, matching
+ * the "Make manager" action. Showing the raw value left the chip saying "Admin"
+ * next to a button offering to make someone a manager.
+ */
+private fun roleLabel(role: String): String = when (role) {
+    ROLE_OWNER -> "Owner"
+    ROLE_ADMIN -> "Manager"
+    ROLE_MEMBER -> "Member"
+    else -> role.replaceFirstChar { it.uppercase() }
 }
 
 /**
@@ -1009,13 +1413,13 @@ private fun MemberList(members: List<MemberInfo>) {
 @Composable
 private fun RoleChip(role: String) {
     val color = when (role) {
-        "owner" -> MaterialTheme.colorScheme.primary
-        "admin" -> MaterialTheme.colorScheme.secondary
+        ROLE_OWNER -> MaterialTheme.colorScheme.primary
+        ROLE_ADMIN -> MaterialTheme.colorScheme.secondary
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     Surface(color = color.copy(alpha = .15f), shape = MaterialTheme.shapes.small) {
         Text(
-            text = role.replaceFirstChar { it.uppercase() },
+            text = roleLabel(role),
             style = MaterialTheme.typography.labelSmall,
             color = color,
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
@@ -1205,6 +1609,69 @@ private fun InviteCodeDialog(code: String, onDismiss: () -> Unit) {
 // ═══════════════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════════════
+
+/**
+ * Date picker for a task deadline.
+ *
+ * A deadline is a *day*, not an instant — "due Friday" — so this picks a date
+ * and pins it to the end of that day in the device's own zone before
+ * converting to the RFC 3339 instant the API stores. Using start-of-day would
+ * make a task due on Friday show as overdue for the whole of Friday.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DueDatePickerDialog(
+    initial: OffsetDateTime?,
+    onDismiss: () -> Unit,
+    onPicked: (String) -> Unit,
+) {
+    // DatePicker works in UTC-midnight millis, so seed it from the deadline's
+    // date as the user sees it locally, not from the raw instant.
+    val initialMillis = initial
+        ?.atZoneSameInstant(ZoneId.systemDefault())
+        ?.toLocalDate()
+        ?.atStartOfDay(ZoneOffset.UTC)
+        ?.toInstant()
+        ?.toEpochMilli()
+
+    val state = rememberDatePickerState(initialSelectedDateMillis = initialMillis)
+
+    DatePickerDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    state.selectedDateMillis?.let { millis ->
+                        val date = Instant.ofEpochMilli(millis)
+                            .atZone(ZoneOffset.UTC)
+                            .toLocalDate()
+                        val endOfDay = date.atTime(23, 59)
+                            .atZone(ZoneId.systemDefault())
+                            .toOffsetDateTime()
+                        onPicked(endOfDay.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME))
+                    }
+                },
+                enabled = state.selectedDateMillis != null,
+            ) { Text("Set deadline") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    ) {
+        DatePicker(state = state)
+    }
+}
+
+/** Deadline as a person would read it. Includes the year only when it isn't this one. */
+private fun formatDueDate(due: OffsetDateTime): String {
+    val local = due.atZoneSameInstant(ZoneId.systemDefault()).toLocalDate()
+    val pattern = if (local.year == LocalDate.now().year) "EEE d MMM" else "EEE d MMM yyyy"
+    return local.format(DateTimeFormatter.ofPattern(pattern))
+}
+
+/** A deadline in the past on a task that isn't finished. */
+private fun isOverdue(task: Task): Boolean {
+    val due = task.dueDate ?: return false
+    return task.status != "done" && due.isBefore(OffsetDateTime.now())
+}
 
 /** Absolute date for the detail sheet, where "23h ago" is less useful than a date. */
 private fun formatStamp(time: OffsetDateTime?): String {

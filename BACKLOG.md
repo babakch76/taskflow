@@ -156,11 +156,36 @@ models already carry `description`, so nothing to add there.
   signs you out. Confirm, or move it behind the overflow menu (Dashboard now
   has one).
 
+## Deadlines, roles and calendar (2026-08-02) — DONE
+
+Built on request, ahead of the need-finding interviews that were originally
+meant to inform role design. Flagged at the time; the decision was to proceed.
+
+- `group_members.role` (owner/admin/member) is now actually enforced. It was in
+  the schema from the start but `GetMemberRole` had never been called once.
+- Only owner/manager may set or clear a task's `due_date`; everything else stays
+  open to all members. The check keys off whether `due_date` is *present* in the
+  patch, so a member editing a title is unaffected.
+- `PATCH /groups/{id}/members/{user_id}/role`, owner only. The owner's own role
+  cannot be changed, by anyone.
+- Calendar is a per-group tab: month grid, a dot per task (error = overdue,
+  tertiary = done), tap a day for its tasks. Tasks with no deadline are counted
+  at the bottom rather than silently omitted.
+- "admin" on the wire is shown as **Manager** throughout the UI.
+
+Open questions deliberately left:
+
+- Should the *assignee* be able to set their own deadline? Currently no.
+- Nothing else is role-gated (delete, invite, group settings). Revisit after the
+  interviews rather than guessing.
+- The calendar is per-group. A cross-group "my deadlines" view was considered
+  and deferred — it needs an aggregate endpoint.
+
 ## Also known (raised in passing, not yet triaged)
 
-- **No due-date UI.** The backend stores `due_date`, accepts it on create and
-  patch, and `Patchable.SetNull` can clear it — but no screen sets it. This is
-  the prerequisite for the calendar/deadline work.
+- **DONE** ~~No due-date UI.~~ Deadlines are set from the task detail sheet by
+  the owner or a manager, shown on a month calendar tab, and cleared with
+  `Patchable.SetNull`.
 - **Reinstalling the APK signs you out.** `EncryptedSharedPreferences` loses its
   Keystore-backed key across reinstalls, so the JWT is unreadable and the app
   starts at Login. Expected behaviour rather than a defect, but it surprises
