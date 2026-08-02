@@ -20,17 +20,32 @@ plugins {
  * res/xml/network_security_config.xml, since cleartext HTTP is allow-listed
  * per-domain.
  */
+/** Everything machine-local: SDK path, backend URL, release signing. Never committed. */
+val localProperties: Properties = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+
 val taskflowBaseUrl: String = run {
-    val props = Properties()
-    val localPropertiesFile = rootProject.file("local.properties")
-    if (localPropertiesFile.exists()) {
-        localPropertiesFile.inputStream().use { props.load(it) }
-    }
-    val configured = props.getProperty("taskflow.baseUrl")?.trim()
+    val configured = localProperties.getProperty("taskflow.baseUrl")?.trim()
     val raw = if (configured.isNullOrEmpty()) "http://10.0.2.2:8080/" else configured
     // Retrofit requires a base URL ending in '/'.
     if (raw.endsWith("/")) raw else "$raw/"
 }
+
+/**
+ * Release keystore, if one has been configured.
+ *
+ * Kept in local.properties (gitignored) so the keystore path and passwords
+ * never reach the repository. When it isn't configured the release build still
+ * works — it just produces an *unsigned* APK, which Android cannot install.
+ * See README.md for how to create one.
+ */
+val releaseKeystore: File? = localProperties.getProperty("taskflow.keystore")
+    ?.trim()
+    ?.takeIf { it.isNotEmpty() }
+    ?.let { rootProject.file(it) }
+    ?.takeIf { it.exists() }
 
 android {
     namespace = "com.taskflow.app"
@@ -46,8 +61,25 @@ android {
         buildConfigField("String", "BASE_URL", "\"$taskflowBaseUrl\"")
     }
 
+    signingConfigs {
+        // Only declared when a keystore is actually configured, so the build
+        // still works on a fresh clone that has none.
+        releaseKeystore?.let { keystore ->
+            create("release") {
+                storeFile = keystore
+                storePassword = localProperties.getProperty("taskflow.keystorePassword")
+                keyAlias = localProperties.getProperty("taskflow.keyAlias")
+                keyPassword = localProperties.getProperty("taskflow.keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
+            // Unsigned without a configured keystore — Android will refuse to
+            // install that APK. See README.md.
+            signingConfig = signingConfigs.findByName("release")
+
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

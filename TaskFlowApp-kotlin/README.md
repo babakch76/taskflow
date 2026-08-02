@@ -81,6 +81,75 @@ From the phone's browser, open `http://<your-ip>:8080/groups`. A
 `{"error":"missing or invalid authorization header"}` response means the network
 path works and only auth is missing — that is the result you want.
 
+## Producing an APK
+
+### Day to day: the debug APK
+
+```bash
+./gradlew assembleDebug
+```
+
+Lands at `app/build/outputs/apk/debug/app-debug.apk` (~18 MB). Signed with the
+shared debug key, so it installs on any device — this is the one to send a
+teammate for testing.
+
+> **⚠️ If you changed `taskflow.baseUrl`, run `clean` first:**
+>
+> ```bash
+> ./gradlew clean assembleDebug
+> ```
+>
+> `BASE_URL` is a `buildConfigField`, which the compiler **inlines** into
+> `RetrofitClient`. An incremental build regenerates `BuildConfig.java` with the
+> new URL while leaving the compiled Kotlin alone, so the APK keeps calling the
+> old server. Reading `BuildConfig.java` will *not* reveal this — verify by
+> watching Logcat's `okhttp` output for the URL a real request goes to.
+
+In Android Studio: **Build → Build Bundle(s) / APK(s) → Build APK(s)**, then
+"locate" in the notification. Same caveat — **Build → Clean Project** first if
+the URL changed.
+
+Debug builds log full request bodies to Logcat, including the plaintext
+password on login. Fine locally; don't share a debug Logcat.
+
+### For handing in: a signed release APK
+
+`assembleRelease` alone produces `app-release-unsigned.apk`, which **Android
+refuses to install**. It needs a keystore. Create one once:
+
+```bash
+keytool -genkeypair -v -keystore taskflow-release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias taskflow
+```
+
+`keytool` ships with the JDK. It asks for a password and a few name fields —
+answer them yourself; the password is never typed into a build file.
+
+Keep the `.jks` **outside the repo** (it's gitignored, but don't rely on that),
+then point `local.properties` at it:
+
+```properties
+taskflow.keystore=../taskflow-release.jks
+taskflow.keystorePassword=your-password
+taskflow.keyAlias=taskflow
+taskflow.keyPassword=your-password
+```
+
+`local.properties` is gitignored, so the path and passwords stay off GitHub.
+
+```bash
+./gradlew clean assembleRelease
+```
+
+Now `app/build/outputs/apk/release/app-release.apk` — signed, installable, ~12 MB
+(smaller than debug: no debug symbols, and `HttpLoggingInterceptor` is at `NONE`).
+
+**Keep that keystore and its password.** Signing a later version with a
+different key makes it a different app to Android — users have to uninstall
+first, losing their data.
+
+Without the keystore configured the release build still succeeds; it just emits
+the unsigned APK and the signing step is skipped.
+
 ## Screens
 
 | Screen | What it does |
