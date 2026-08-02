@@ -183,15 +183,10 @@ Kotlin `Task.updatedAt` is nullable. It is set on insert and bumped on every
 
 ## Deployment
 
-- **[AWS-WALKTHROUGH.md](AWS-WALKTHROUGH.md)** — click-by-click from an empty
-  AWS account to the app talking to your server over HTTPS. Follow this the
-  first time.
-- **[DEPLOYMENT.md](DEPLOYMENT.md)** — the same thing as a terse command
-  reference, once you know the shape.
+Build a binary, put it behind a TLS reverse proxy, run it under systemd.
+`deploy/` holds a ready systemd unit and a Caddy config.
 
-`deploy/` holds the systemd unit and Caddy config both refer to.
-
-Two traps worth knowing before you start:
+Two traps that will cost you an afternoon each:
 
 - **`GOOS=linux GOARCH=amd64 go build` does not work here.** Cross-compiling
   implicitly sets `CGO_ENABLED=0`, and `mattn/go-sqlite3` is a CGO package — it
@@ -201,9 +196,16 @@ Two traps worth knowing before you start:
   `go version -m ./server | grep CGO_ENABLED`.
 - **The Android client requires HTTPS for any non-local host.** Its
   `network_security_config.xml` forbids cleartext except to the emulator/LAN
-  addresses, so a plain `http://` public endpoint will be refused by the app.
-  DEPLOYMENT.md sets up Caddy with an automatic Let's Encrypt certificate,
-  which needs no client-side changes at all.
+  addresses, so a plain `http://` public endpoint is refused by the app before
+  a request is even sent. Terminate TLS in front of the server — Caddy obtains
+  and renews a Let's Encrypt certificate on its own, which Android trusts with
+  no client-side configuration. Do **not** work around this by widening
+  `cleartextTrafficPermitted`; on a public host that puts every password and
+  JWT on the wire in plaintext.
+
+Note that the client's base URL is compiled in via `buildConfigField`, and the
+constant gets inlined — after changing it you must **clean** the Android build,
+not just rebuild, or the APK keeps calling the old server.
 
 ### Environment variables
 

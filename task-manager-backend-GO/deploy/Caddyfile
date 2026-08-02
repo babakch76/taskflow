@@ -11,7 +11,8 @@
 #
 # The hostname must be a real DNS name that resolves to this server's public IP.
 # A bare IP address cannot get a certificate. If you don't own a domain, a free
-# DuckDNS subdomain works — see DEPLOYMENT.md.
+# DuckDNS subdomain works. Ports 80 and 443 must both be reachable — 80 is used
+# for the ACME challenge even though your traffic runs on 443.
 
 taskflow-CHANGE-ME.duckdns.org {
 	# The Go server listens on loopback only (BIND_ADDR=127.0.0.1).

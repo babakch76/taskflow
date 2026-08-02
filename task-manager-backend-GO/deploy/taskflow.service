@@ -4,7 +4,11 @@
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now taskflow
 #
-# See DEPLOYMENT.md for the full walkthrough (user, directories, env file).
+# Expects, on the target machine:
+#   - a system user `taskflow` (useradd --system --no-create-home)
+#   - /opt/taskflow/taskflow-server   (the binary, built WITH CGO_ENABLED=1)
+#   - /var/lib/taskflow/              (owned by taskflow — the database lives here)
+#   - /etc/taskflow/taskflow.env      (chmod 600, containing JWT_SECRET=...)
 
 [Unit]
 Description=TaskFlow API server
