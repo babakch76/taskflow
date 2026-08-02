@@ -6,7 +6,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Group
@@ -331,7 +333,13 @@ private fun GroupList(
     onGroupClick: (String) -> Unit,
 ) {
     LazyColumn(
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+        contentPadding = PaddingValues(
+            start = 16.dp,
+            end = 16.dp,
+            top = 12.dp,
+            // Clears the FAB so the last row is reachable.
+            bottom = 88.dp,
+        ),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         items(groups, key = { it.id }) { group ->
@@ -463,7 +471,15 @@ private fun PendingInvitesDialog(
         onDismissRequest = onDismiss,
         title = { Text("Invitations", fontWeight = FontWeight.Bold) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            // Scrollable and height-capped. Without this, AlertDialog clips its
+            // content and everything past roughly the sixth invite becomes
+            // unreachable — no scroll, no indication anything is missing.
+            Column(
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier
+                    .heightIn(max = 400.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
                 invites.forEach { invite ->
                     Column(modifier = Modifier.padding(vertical = 4.dp)) {
                         Text(

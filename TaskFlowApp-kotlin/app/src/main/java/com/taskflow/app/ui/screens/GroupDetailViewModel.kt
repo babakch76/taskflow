@@ -152,7 +152,7 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
     // ─── Tasks ──────────────────────────────────────────────────
 
     fun createTask(title: String, description: String, assignedTo: String?) {
-        runAction {
+        runAction(successMessage = "Task added") {
             api.createTask(
                 groupId,
                 CreateTaskRequest(
@@ -168,7 +168,9 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
         // Only `status` is set; assignedTo/dueDate stay Patchable.Absent and are
         // therefore omitted from the JSON entirely, so this cannot disturb the
         // assignee or the deadline.
-        runAction { api.updateTask(groupId, taskId, UpdateTaskRequest(status = status)) }
+        runAction(successMessage = "Moved to ${statusLabelFor(status)}") {
+            api.updateTask(groupId, taskId, UpdateTaskRequest(status = status))
+        }
     }
 
     /**
@@ -181,17 +183,21 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
      */
     fun setTaskAssignee(taskId: String, userId: String?) {
         val assignee = if (userId == null) Patchable.SetNull else Patchable.Value(userId)
-        runAction { api.updateTask(groupId, taskId, UpdateTaskRequest(assignedTo = assignee)) }
+        val note = if (userId == null) "Assignee removed" else "Task assigned"
+        runAction(successMessage = note) {
+            api.updateTask(groupId, taskId, UpdateTaskRequest(assignedTo = assignee))
+        }
     }
 
     fun deleteTask(taskId: String) {
-        runAction { api.deleteTask(groupId, taskId) }
+        runAction(successMessage = "Task deleted") { api.deleteTask(groupId, taskId) }
     }
 
     /** Multi-select: one status for many tasks, in a single backend transaction. */
     fun bulkSetStatus(taskIds: Set<String>, status: String) {
         if (taskIds.isEmpty()) return
-        runAction {
+        val note = if (taskIds.size == 1) "1 task moved" else "${taskIds.size} tasks moved"
+        runAction(successMessage = note) {
             api.bulkUpdateTaskStatus(
                 groupId,
                 BulkUpdateTaskStatusRequest(taskIds = taskIds.toList(), status = status),
@@ -301,6 +307,14 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
             ?.takeIf { it.isSuccessful }?.body() ?: return
         activityCursor = fresh.firstOrNull()?.createdAt?.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
         _uiState.value = _uiState.value.copy(activity = fresh)
+    }
+
+    /** Mirrors the UI's status labels so snackbars read the same as the chips. */
+    private fun statusLabelFor(status: String) = when (status) {
+        "todo" -> "To do"
+        "in_progress" -> "In progress"
+        "done" -> "Done"
+        else -> status
     }
 
     private fun networkMessage(e: Throwable) =

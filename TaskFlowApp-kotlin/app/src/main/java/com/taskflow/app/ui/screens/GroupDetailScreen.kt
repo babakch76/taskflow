@@ -1,27 +1,36 @@
 package com.taskflow.app.ui.screens
 
+import android.content.Intent
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -65,6 +74,8 @@ fun GroupDetailScreen(
     var confirmLeave by remember { mutableStateOf(false) }
     // Multi-select is pure UI state, so it lives here rather than in the VM.
     var selectedTasks by remember { mutableStateOf(setOf<String>()) }
+    // Task pending deletion — deleting is irreversible, so it goes via a confirm.
+    var taskToDelete by remember { mutableStateOf<Task?>(null) }
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -92,6 +103,12 @@ fun GroupDetailScreen(
     }
 
     val inSelectionMode = selectedTasks.isNotEmpty()
+
+    // Back should cancel the selection, not abandon the screen — that's what
+    // every other multi-select on the platform does.
+    BackHandler(enabled = inSelectionMode) {
+        selectedTasks = emptySet()
+    }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -228,7 +245,7 @@ fun GroupDetailScreen(
                                 viewModel.setTaskStatus(task.id, next)
                             },
                             onUnassign = { viewModel.setTaskAssignee(it.id, null) },
-                            onDelete = { viewModel.deleteTask(it.id) },
+                            onDelete = { taskToDelete = it },
                             onCreate = { showCreateTask = true },
                         )
 
@@ -261,6 +278,29 @@ fun GroupDetailScreen(
 
     state.inviteCode?.let { code ->
         InviteCodeDialog(code = code, onDismiss = { viewModel.dismissInviteCode() })
+    }
+
+    // Deleting a task is irreversible — there is no undelete endpoint, so a
+    // snackbar-with-Undo would be a lie. Confirm up front instead.
+    taskToDelete?.let { task ->
+        AlertDialog(
+            onDismissRequest = { taskToDelete = null },
+            title = { Text("Delete this task?", fontWeight = FontWeight.Bold) },
+            text = {
+                Text("\"${task.title}\" will be removed for everyone in the group. This can't be undone.")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deleteTask(task.id)
+                    taskToDelete = null
+                }) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { taskToDelete = null }) { Text("Cancel") }
+            },
+        )
     }
 
     if (confirmLeave) {
@@ -449,7 +489,13 @@ private fun TaskList(
     }
 
     LazyColumn(
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+        contentPadding = PaddingValues(
+            start = 16.dp,
+            end = 16.dp,
+            top = 12.dp,
+            // Clears the FAB so the last row is reachable.
+            bottom = 88.dp,
+        ),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         items(tasks, key = { it.id }) { task ->
@@ -586,7 +632,13 @@ private fun ActivityList(events: List<ActivityEvent>) {
     }
 
     LazyColumn(
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+        contentPadding = PaddingValues(
+            start = 16.dp,
+            end = 16.dp,
+            top = 12.dp,
+            // Clears the FAB so the last row is reachable.
+            bottom = 88.dp,
+        ),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         items(events, key = { it.id }) { event ->
@@ -609,9 +661,9 @@ private fun ActivityList(events: List<ActivityEvent>) {
                         text = describeEvent(event),
                         style = MaterialTheme.typography.bodyMedium,
                     )
-                    if (event.detail.isNotBlank()) {
+                    humaniseDetail(event)?.let { detail ->
                         Text(
-                            text = event.detail,
+                            text = detail,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -640,6 +692,62 @@ private fun describeEvent(e: ActivityEvent): String = when (e.eventType) {
     else -> "${e.actorUsername}: ${e.eventType}"
 }
 
+/**
+ * Turns the backend's `detail` string into something a person would say.
+ *
+ * The backend writes `detail` for machines as much as humans — `task_updated`
+ * carries a comma-separated list of changed fields like
+ * `status=done, assigned_to=cleared`, and the bulk event carries
+ * `2 task(s) → done`. Rendering that raw made the feed read like a debug log.
+ *
+ * For created/deleted events `detail` is just the task title, which already
+ * reads fine and is passed through untouched.
+ *
+ * Returns null when there is nothing worth showing on a second line.
+ */
+private fun humaniseDetail(e: ActivityEvent): String? {
+    val detail = e.detail.trim()
+    if (detail.isEmpty()) return null
+
+    return when (e.eventType) {
+        "task_created", "task_deleted" -> detail
+
+        "task_updated" -> detail
+            .split(",")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .mapNotNull { field ->
+                when {
+                    field == "title" -> "renamed it"
+                    field == "description" -> "edited the description"
+                    field == "assigned_to" -> "changed who it's assigned to"
+                    field == "assigned_to=cleared" -> "removed the assignee"
+                    field == "due_date" -> "changed the deadline"
+                    field == "due_date=cleared" -> "removed the deadline"
+                    field.startsWith("status=") ->
+                        "moved it to ${statusLabel(field.removePrefix("status="))}"
+                    else -> null
+                }
+            }
+            .takeIf { it.isNotEmpty() }
+            ?.joinToString(", ")
+            ?.replaceFirstChar { it.uppercase() }
+
+        "tasks_bulk_updated" -> {
+            // "2 task(s) → done"
+            val count = detail.substringBefore(" ").toIntOrNull()
+            val status = detail.substringAfterLast("→").trim()
+            if (count != null && status.isNotEmpty()) {
+                "${if (count == 1) "1 task" else "$count tasks"} → ${statusLabel(status)}"
+            } else {
+                detail
+            }
+        }
+
+        else -> detail
+    }
+}
+
 @Composable
 private fun eventColor(type: String) = when (type) {
     "task_created" -> MaterialTheme.colorScheme.primary
@@ -655,7 +763,13 @@ private fun eventColor(type: String) = when (type) {
 @Composable
 private fun MemberList(members: List<MemberInfo>) {
     LazyColumn(
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+        contentPadding = PaddingValues(
+            start = 16.dp,
+            end = 16.dp,
+            top = 12.dp,
+            // Clears the FAB so the last row is reachable.
+            bottom = 88.dp,
+        ),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         items(members, key = { it.id }) { member ->
@@ -693,10 +807,32 @@ private fun MemberList(members: List<MemberInfo>) {
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    StatusChip(member.role)
+                    RoleChip(member.role)
                 }
             }
         }
+    }
+}
+
+/**
+ * Role badge. Separate from [StatusChip] because roles and task statuses are
+ * different vocabularies — sharing the chip meant "owner" rendered raw and
+ * lowercase, styled as if it were a task state.
+ */
+@Composable
+private fun RoleChip(role: String) {
+    val color = when (role) {
+        "owner" -> MaterialTheme.colorScheme.primary
+        "admin" -> MaterialTheme.colorScheme.secondary
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Surface(color = color.copy(alpha = .15f), shape = MaterialTheme.shapes.small) {
+        Text(
+            text = role.replaceFirstChar { it.uppercase() },
+            style = MaterialTheme.typography.labelSmall,
+            color = color,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+        )
     }
 }
 
@@ -704,6 +840,7 @@ private fun MemberList(members: List<MemberInfo>) {
 // Dialogs
 // ═══════════════════════════════════════════════════════════════
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CreateTaskDialog(
     members: List<MemberInfo>,
@@ -719,7 +856,12 @@ private fun CreateTaskDialog(
         onDismissRequest = onDismiss,
         title = { Text("New Task", fontWeight = FontWeight.Bold) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            // Scrollable: a large group's assignee chips can otherwise push the
+            // buttons off the bottom of the dialog.
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+            ) {
                 OutlinedTextField(
                     value = title,
                     onValueChange = { title = it; error = null },
@@ -736,13 +878,19 @@ private fun CreateTaskDialog(
                 )
                 if (members.isNotEmpty()) {
                     Text("Assign to", style = MaterialTheme.typography.labelMedium)
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    // FlowRow, not a fixed Row: this used to render only the
+                    // first three members, which made everyone else in a larger
+                    // group silently unassignable.
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
                         FilterChip(
                             selected = assignee == null,
                             onClick = { assignee = null },
                             label = { Text("Nobody") },
                         )
-                        members.take(3).forEach { member ->
+                        members.forEach { member ->
                             FilterChip(
                                 selected = assignee?.id == member.id,
                                 onClick = { assignee = member },
@@ -799,8 +947,19 @@ private fun InviteByUsernameDialog(onDismiss: () -> Unit, onInvite: (String) -> 
     )
 }
 
+/**
+ * Shows a generated invite code with copy and share actions.
+ *
+ * The code is 12 hex characters. Displaying it as plain text meant the user had
+ * to read it off the screen and retype it into a chat app — error-prone, and
+ * the whole point of the code is that it travels.
+ */
 @Composable
 private fun InviteCodeDialog(code: String, onDismiss: () -> Unit) {
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+    var copied by remember { mutableStateOf(false) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Invite code", fontWeight = FontWeight.Bold) },
@@ -824,6 +983,31 @@ private fun InviteCodeDialog(code: String, onDismiss: () -> Unit) {
                         ),
                         modifier = Modifier.padding(16.dp),
                     )
+                }
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilledTonalButton(onClick = {
+                        clipboard.setText(AnnotatedString(code))
+                        copied = true
+                    }) {
+                        Icon(Icons.Default.ContentCopy, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (copied) "Copied" else "Copy")
+                    }
+                    FilledTonalButton(onClick = {
+                        val share = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(
+                                Intent.EXTRA_TEXT,
+                                "Join my TaskFlow group with this code: $code",
+                            )
+                        }
+                        context.startActivity(Intent.createChooser(share, "Share invite code"))
+                    }) {
+                        Icon(Icons.Default.Share, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Share")
+                    }
                 }
             }
         },

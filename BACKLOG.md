@@ -9,7 +9,7 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
 
 ## Bugs
 
-### B-1 · Invite list can't scroll past ~6 entries — OPEN
+### B-1 · Invite list can't scroll past ~6 entries — DONE (round 1)
 
 **Reported:** 2026-08-01
 
@@ -22,7 +22,8 @@ invites out in a plain `Column` with `invites.forEach`. `AlertDialog` constrains
 its content height, so anything past the visible area is simply cut off. Nothing
 in that Column scrolls.
 
-**Fix:** give the content `Modifier.verticalScroll(rememberScrollState())`, or
+**Fixed:** content now has `heightIn(max = 400.dp)` + `verticalScroll`.
+Original plan: give the content `Modifier.verticalScroll(rememberScrollState())`, or
 swap the `Column` for a `LazyColumn` with a bounded `heightIn(max = …)`. Lazy is
 the better choice if the list can get long, since it also avoids composing every
 row. Worth capping the dialog height explicitly either way so it doesn't grow to
@@ -94,14 +95,14 @@ models already carry `description`, so nothing to add there.
 
 ### Functional bugs found during review
 
-- **B-3 · Task can only be assigned to the first 3 members.** `CreateTaskDialog`
+- **B-3 · DONE (round 1) · Task could only be assigned to the first 3 members.** `CreateTaskDialog`
   in `GroupDetailScreen.kt` (~line 745) does `members.take(3)` for the assignee
   chips. Group of 5 → two people can never be assigned. Needs a scrollable/flow
   layout or a dropdown instead of a capped chip row.
-- **B-4 · System back doesn't exit selection mode.** No `BackHandler` in
+- **B-4 · DONE (round 1) · System back didn't exit selection mode.** No `BackHandler` in
   `GroupDetailScreen`; in multi-select, back exits the whole screen instead of
   clearing the selection. Add `BackHandler(enabled = inSelectionMode)`.
-- **B-5 · Keyboard covers the primary button on auth screens.** Observed while
+- **B-5 · DONE (round 1) · Keyboard covered the primary button on auth screens.** Observed while
   driving Register: the IME hid Create Account with no way to scroll to it.
   Auth columns need `verticalScroll` + `imePadding()`.
 
@@ -111,30 +112,33 @@ models already carry `description`, so nothing to add there.
   card silently advances todo → in_progress → done; nothing signals it, and a
   mis-tap "completes" a task with no undo. Replace with an explicit control
   (status chip opens a menu, or checkbox = done) or add undo via snackbar.
-- **Destructive actions are one tap, no confirm, no undo.** Task delete
+- **DONE (round 1)** ~~Destructive actions are one tap, no confirm, no undo.~~
+  Task delete now confirms. (Undo would need an undelete endpoint — deliberately
+  not faked with a snackbar.)  Original note: Task delete
   especially — the trash icon sits beside every card. Snackbar-with-Undo is the
   Material pattern; confirmation dialog is the cheap stopgap.
 - **No task detail/edit screen.** Title/description can never be changed after
   creation (the API supports it); descriptions truncate at 2 lines with no way
   to read the rest. Tapping a card should open a detail sheet — which also
   frees the tap gesture from status-cycling.
-- **Activity feed leaks developer strings.** `detail` renders raw
+- **DONE (round 1)** ~~Activity feed leaks developer strings.~~ Original note: `detail` renders raw
   `assigned_to=cleared`, `status=in_progress`, `2 task(s) → done`. Humanise
   client-side ("cleared the assignee", "moved 2 tasks to Done").
-- **Silent success.** Most mutations show nothing on success (only failures
+- **DONE (round 1)** ~~Silent success.~~ Mutations now confirm via snackbar. Original note: Most mutations show nothing on success (only failures
   surface). Bulk moves, status changes, task creation should confirm via
   snackbar — which is also where Undo lives.
 - **Session expiry is unexplained.** On a 401 the app bounces to Login with no
   message; user can't tell logout from crash. Show "session expired, sign in
   again."
-- **Invite code can't be copied or shared.** `InviteCodeDialog` shows the code
+- **DONE (round 1)** ~~Invite code can't be copied or shared.~~ Original note: `InviteCodeDialog` shows the code
   as plain text; user must transcribe it. Add copy-to-clipboard + system share
   sheet.
 - **No pull-to-refresh** anywhere; refresh is a toolbar icon only. Material
   `PullToRefreshBox` on Dashboard + group tabs.
-- **FAB overlaps the last list item** — task/group lists need bottom content
+- **DONE (round 1)** ~~FAB overlaps the last list item~~ — task/group lists need bottom content
   padding (~88dp).
-- **Members tab reuses StatusChip for roles**, so "owner" renders raw and
+- **DONE (round 1)** ~~Members tab reuses StatusChip for roles~~ — now a RoleChip.
+  Was: so "owner" renders raw and
   lowercase.
 - **No sorting/grouping/filtering of tasks** — done tasks interleave with
   todos in creation order. At minimum: group by status or sort done-last.
