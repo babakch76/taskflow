@@ -20,6 +20,7 @@ import com.taskflow.app.data.local.TokenManager
 import com.taskflow.app.data.model.LoginRequest
 import com.taskflow.app.data.remote.ApiErrors
 import com.taskflow.app.data.remote.RetrofitClient
+import com.taskflow.app.data.remote.SessionManager
 import kotlinx.coroutines.launch
 
 /**
@@ -52,6 +53,16 @@ fun LoginScreen(
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var successMessage by remember { mutableStateOf<String?>(null) }
+
+    // If a 401 bounced the user here mid-task, say so. Read once on first
+    // composition: consuming it means a later manual sign-out stays silent.
+    var noticeMessage by remember {
+        mutableStateOf(
+            if (SessionManager.consumeExpiryNotice()) {
+                "Your session expired. Please sign in again."
+            } else null
+        )
+    }
 
     fun doLogin() {
         if (email.isBlank() || password.isBlank()) {
@@ -127,7 +138,7 @@ fun LoginScreen(
             // ─── Email field ───
             OutlinedTextField(
                 value = email,
-                onValueChange = { email = it; errorMessage = null },
+                onValueChange = { email = it; errorMessage = null; noticeMessage = null },
                 label = { Text("Email") },
                 singleLine = true,
                 enabled = !isLoading,
@@ -197,6 +208,22 @@ fun LoginScreen(
             Spacer(modifier = Modifier.height(12.dp))
 
             // ─── Feedback messages ───
+            AnimatedVisibility(visible = noticeMessage != null) {
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        text = noticeMessage ?: "",
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(16.dp),
+                    )
+                }
+            }
+
             AnimatedVisibility(visible = errorMessage != null) {
                 Card(
                     colors = CardDefaults.cardColors(

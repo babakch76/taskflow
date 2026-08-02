@@ -34,7 +34,7 @@ the same clipping before calling this closed.
 
 ---
 
-### B-2 · New invites only appear after a manual refresh — OPEN
+### B-2 · New invites only appear after a manual refresh — DONE (round 3)
 
 **Reported:** 2026-08-01
 
@@ -46,7 +46,13 @@ have to hit refresh to discover it.
 `GroupDetailViewModel`, which polls the activity feed every 5s — the Dashboard
 never got the same treatment.
 
-**Fix:** poll `fetchInvites()` on an interval from a `LaunchedEffect` in
+**Fixed:** `PollWhileResumed` ticks `fetchInvites()` every 20s while the
+Dashboard is resumed, and immediately on resume. Built on `repeatOnLifecycle`,
+so it also stops polling while the app is backgrounded — which fixes the
+separate complaint about the activity feed below. The FCM point still stands
+if a third poller ever appears.
+
+Original plan: poll `fetchInvites()` on an interval from a `LaunchedEffect` in
 `DashboardScreen`, the same way `GroupDetailScreen` polls activity. Points to
 settle:
 
@@ -125,21 +131,25 @@ models already carry `description`, so nothing to add there.
 - **DONE (round 1)** ~~Silent success.~~ Mutations now confirm via snackbar. Original note: Most mutations show nothing on success (only failures
   surface). Bulk moves, status changes, task creation should confirm via
   snackbar — which is also where Undo lives.
-- **Session expiry is unexplained.** On a 401 the app bounces to Login with no
+- **DONE (round 3)** ~~Session expiry is unexplained.~~ Login now shows
+  "Your session expired. Please sign in again." Was: On a 401 the app bounces to Login with no
   message; user can't tell logout from crash. Show "session expired, sign in
   again."
 - **DONE (round 1)** ~~Invite code can't be copied or shared.~~ Original note: `InviteCodeDialog` shows the code
   as plain text; user must transcribe it. Add copy-to-clipboard + system share
   sheet.
-- **No pull-to-refresh** anywhere; refresh is a toolbar icon only. Material
-  `PullToRefreshBox` on Dashboard + group tabs.
+- **DONE (round 3)** ~~No pull-to-refresh anywhere.~~ `PullToRefreshBox` on the
+  Dashboard and the group tabs; toolbar icons kept for discoverability.
+  Required bumping the Compose BOM to 2024.09.00 (Material 3 1.3.0), since
+  the pull-to-refresh API did not exist in 1.2.1.
 - **DONE (round 1)** ~~FAB overlaps the last list item~~ — task/group lists need bottom content
   padding (~88dp).
 - **DONE (round 1)** ~~Members tab reuses StatusChip for roles~~ — now a RoleChip.
   Was: so "owner" renders raw and
   lowercase.
-- **No sorting/grouping/filtering of tasks** — done tasks interleave with
-  todos in creation order. At minimum: group by status or sort done-last.
+- **DONE (round 3)** ~~No sorting/grouping of tasks.~~ The task list is grouped
+  under To do / In progress / Done headers with counts, so finished work sinks
+  to the bottom. Filtering is still not implemented.
 - **Login lacks show-password toggle; Login "success" card is dead weight**
   (navigation happens immediately, the message never gets read).
 - **Logout is instant** from an icon that sits next to Refresh — one mis-tap
@@ -155,10 +165,9 @@ models already carry `description`, so nothing to add there.
   Keystore-backed key across reinstalls, so the JWT is unreadable and the app
   starts at Login. Expected behaviour rather than a defect, but it surprises
   testers — worth a line in whatever instructions go out with the APK.
-- **Activity polling keeps running when backgrounded.** `GroupDetailScreen`'s
-  poll is tied to composition, not lifecycle, so it continues if the app is
-  backgrounded with that screen on top. Harmless for a demo; wasteful on
-  battery and worth moving to a lifecycle-aware scope if this ships.
+- **DONE (round 3)** ~~Activity polling keeps running when backgrounded.~~ Both
+  pollers now go through `PollWhileResumed`, which uses `repeatOnLifecycle` to
+  pause on background and tick on resume.
 - **Debug builds log request bodies.** `HttpLoggingInterceptor` is at `BODY` in
   debug, which includes the plaintext password on login/register. `Authorization`
   is redacted and release builds log nothing, but don't share a debug logcat.

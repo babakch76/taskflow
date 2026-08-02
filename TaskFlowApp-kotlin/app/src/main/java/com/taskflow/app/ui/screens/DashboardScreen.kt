@@ -12,13 +12,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Group
-import androidx.compose.material.icons.filled.Logout
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.MailOutline
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material.icons.outlined.FolderOff
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -36,6 +37,13 @@ import com.taskflow.app.data.remote.RetrofitClient
 import kotlinx.coroutines.launch
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
+
+/**
+ * How often to look for new invites while the Dashboard is on screen.
+ * Deliberately slower than the group activity feed: invites are occasional,
+ * and each poll is a request for every user sitting on this screen.
+ */
+private const val INVITE_POLL_MILLIS = 20_000L
 
 /**
  * Dashboard screen displaying the user's groups in a scrollable list.
@@ -60,6 +68,7 @@ fun DashboardScreen(
     val invites by viewModel.invites.collectAsState()
     val actionMessage by viewModel.actionMessage.collectAsState()
     val isWorking by viewModel.isWorking.collectAsState()
+    val isRefreshing by viewModel.isRefreshing.collectAsState()
 
     var showCreateDialog by remember { mutableStateOf(false) }
     var showInvites by remember { mutableStateOf(false) }
@@ -67,6 +76,13 @@ fun DashboardScreen(
     var showMenu by remember { mutableStateOf(false) }
 
     val snackbarHostState = remember { SnackbarHostState() }
+
+    // An invite that arrives while you're sitting here should appear on its
+    // own. A slower cadence than the activity feed on purpose — invites are
+    // rare, and this also refreshes immediately whenever the app is resumed.
+    PollWhileResumed(intervalMillis = INVITE_POLL_MILLIS) {
+        viewModel.fetchInvites()
+    }
 
     LaunchedEffect(actionMessage) {
         actionMessage?.let {
@@ -123,7 +139,7 @@ fun DashboardScreen(
                         HorizontalDivider()
                         DropdownMenuItem(
                             text = { Text("Sign out") },
-                            leadingIcon = { Icon(Icons.Default.Logout, null) },
+                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.Logout, null) },
                             onClick = { showMenu = false; onLogout() },
                         )
                     }
@@ -151,7 +167,13 @@ fun DashboardScreen(
             if (isWorking) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
-            Box(modifier = Modifier.fillMaxSize()) {
+            // Pull-to-refresh: the toolbar icon stays for discoverability, but
+            // the swipe is what people actually reach for on a list.
+            PullToRefreshBox(
+                isRefreshing = isRefreshing,
+                onRefresh = { viewModel.refresh() },
+                modifier = Modifier.fillMaxSize(),
+            ) {
                 when (val state = uiState) {
                     is DashboardUiState.Loading -> LoadingState()
                     is DashboardUiState.Error -> ErrorState(

@@ -28,10 +28,32 @@ object SessionManager {
     val sessionExpired: SharedFlow<Unit> = _sessionExpired.asSharedFlow()
 
     /**
+     * Set when a 401 forced a sign-out, cleared once the Login screen has said
+     * so. Separate from [sessionExpired] because the flow is a navigation
+     * trigger with no replay — by the time Login is composed the event is gone,
+     * and the user would be staring at a sign-in form with no idea why they
+     * were thrown out of what they were doing.
+     */
+    @Volatile
+    private var expiryNoticePending = false
+
+    /**
      * Called by [TokenExpiredInterceptor] when a 401 response is received.
      * Clears any buffered events and emits a single session-expired signal.
      */
     fun notifySessionExpired() {
+        expiryNoticePending = true
         _sessionExpired.tryEmit(Unit)
+    }
+
+    /**
+     * Returns true once if the last trip to Login was caused by an expired
+     * session, then resets. Reading it consumes it, so the message doesn't
+     * reappear on a later manual sign-out.
+     */
+    fun consumeExpiryNotice(): Boolean {
+        val pending = expiryNoticePending
+        expiryNoticePending = false
+        return pending
     }
 }

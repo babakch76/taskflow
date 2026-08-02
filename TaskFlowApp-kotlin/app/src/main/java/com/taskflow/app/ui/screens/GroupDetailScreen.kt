@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -84,15 +85,11 @@ fun GroupDetailScreen(
 
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // Poll the activity feed while this screen is composed. Tying it to the
-    // composition means it stops automatically on navigate-away; it does keep
-    // running if the app is backgrounded with this screen on top, which is
-    // acceptable for a demo but would want a lifecycle-aware scope in anger.
-    LaunchedEffect(groupId) {
-        while (true) {
-            delay(ACTIVITY_POLL_MILLIS)
-            viewModel.pollActivity()
-        }
+    // Activity feed poll — the awareness loop. Lifecycle-aware, so it pauses
+    // when the app is backgrounded and ticks immediately on return rather than
+    // showing stale data for up to a full interval.
+    PollWhileResumed(intervalMillis = ACTIVITY_POLL_MILLIS, key = groupId) {
+        viewModel.pollActivity()
     }
 
     // Leaving may have deleted the group, so get off this screen.
@@ -234,6 +231,11 @@ fun GroupDetailScreen(
                         }
                     }
 
+                    PullToRefreshBox(
+                        isRefreshing = state.isLoading,
+                        onRefresh = { viewModel.refresh() },
+                        modifier = Modifier.fillMaxSize(),
+                    ) {
                     when (selectedTab) {
                         0 -> TaskList(
                             tasks = state.tasks,
@@ -250,6 +252,7 @@ fun GroupDetailScreen(
                         1 -> ActivityList(state.activity)
 
                         2 -> MemberList(state.members)
+                    }
                     }
                 }
             }
@@ -508,6 +511,18 @@ private fun TaskList(
         return
     }
 
+    // Group by status rather than showing one flat list. The backend returns
+    // tasks newest-first regardless of state, so finished work was interleaved
+    // with what still needs doing — the list got less useful the more the group
+    // got done. Order follows TASK_STATUSES, so Done sinks to the bottom.
+    val grouped = remember(tasks) {
+        TASK_STATUSES.mapNotNull { status ->
+            tasks.filter { it.status == status }
+                .takeIf { it.isNotEmpty() }
+                ?.let { status to it }
+        }
+    }
+
     LazyColumn(
         contentPadding = PaddingValues(
             start = 16.dp,
@@ -518,15 +533,25 @@ private fun TaskList(
         ),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        items(tasks, key = { it.id }) { task ->
-            TaskCard(
-                task = task,
-                assigneeName = members.firstOrNull { it.id == task.assignedTo }?.username,
-                isSelected = task.id in selected,
-                anySelected = selected.isNotEmpty(),
-                onToggleSelect = { onToggleSelect(task.id) },
-                onOpenDetail = { onOpenDetail(task) },
-            )
+        grouped.forEach { (status, tasksInStatus) ->
+            item(key = "header-$status") {
+                Text(
+                    text = "${statusLabel(status)} · ${tasksInStatus.size}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
+                )
+            }
+            items(tasksInStatus, key = { it.id }) { task ->
+                TaskCard(
+                    task = task,
+                    assigneeName = members.firstOrNull { it.id == task.assignedTo }?.username,
+                    isSelected = task.id in selected,
+                    anySelected = selected.isNotEmpty(),
+                    onToggleSelect = { onToggleSelect(task.id) },
+                    onOpenDetail = { onOpenDetail(task) },
+                )
+            }
         }
     }
 }

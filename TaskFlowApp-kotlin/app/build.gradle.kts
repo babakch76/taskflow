@@ -73,8 +73,11 @@ android {
 }
 
 dependencies {
-    // Compose BOM — single version source for all Compose libraries
-    val composeBom = platform("androidx.compose:compose-bom:2024.05.00")
+    // Compose BOM — single version source for all Compose libraries.
+    // 2024.09.00 brings Material 3 1.3.0, which is where the stable
+    // pull-to-refresh API (androidx.compose.material3.pulltorefresh) lives.
+    // Still Kotlin 2.0 / AGP 8.4 / minSdk 26 compatible.
+    val composeBom = platform("androidx.compose:compose-bom:2024.09.00")
     implementation(composeBom)
 
     implementation("androidx.core:core-ktx:1.13.1")
@@ -94,6 +97,10 @@ dependencies {
 
     // ViewModel + Compose integration
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.0")
+    // Lifecycle-aware Compose helpers (LocalLifecycleOwner lives here now —
+    // the compose-ui copy is deprecated as of Compose 1.7). Used by
+    // PollWhileResumed to stop polling when the app is backgrounded.
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.0")
 
     // Retrofit + OkHttp
     implementation("com.squareup.retrofit2:retrofit:2.11.0")
