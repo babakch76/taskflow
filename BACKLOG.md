@@ -90,6 +90,60 @@ models already carry `description`, so nothing to add there.
 
 ---
 
+## UX review findings (2026-08-01, from driving every screen)
+
+### Functional bugs found during review
+
+- **B-3 · Task can only be assigned to the first 3 members.** `CreateTaskDialog`
+  in `GroupDetailScreen.kt` (~line 745) does `members.take(3)` for the assignee
+  chips. Group of 5 → two people can never be assigned. Needs a scrollable/flow
+  layout or a dropdown instead of a capped chip row.
+- **B-4 · System back doesn't exit selection mode.** No `BackHandler` in
+  `GroupDetailScreen`; in multi-select, back exits the whole screen instead of
+  clearing the selection. Add `BackHandler(enabled = inSelectionMode)`.
+- **B-5 · Keyboard covers the primary button on auth screens.** Observed while
+  driving Register: the IME hid Create Account with no way to scroll to it.
+  Auth columns need `verticalScroll` + `imePadding()`.
+
+### UX debt (no crash, but hurts flow)
+
+- **Tap-to-cycle status is undiscoverable and error-prone.** Tapping a task
+  card silently advances todo → in_progress → done; nothing signals it, and a
+  mis-tap "completes" a task with no undo. Replace with an explicit control
+  (status chip opens a menu, or checkbox = done) or add undo via snackbar.
+- **Destructive actions are one tap, no confirm, no undo.** Task delete
+  especially — the trash icon sits beside every card. Snackbar-with-Undo is the
+  Material pattern; confirmation dialog is the cheap stopgap.
+- **No task detail/edit screen.** Title/description can never be changed after
+  creation (the API supports it); descriptions truncate at 2 lines with no way
+  to read the rest. Tapping a card should open a detail sheet — which also
+  frees the tap gesture from status-cycling.
+- **Activity feed leaks developer strings.** `detail` renders raw
+  `assigned_to=cleared`, `status=in_progress`, `2 task(s) → done`. Humanise
+  client-side ("cleared the assignee", "moved 2 tasks to Done").
+- **Silent success.** Most mutations show nothing on success (only failures
+  surface). Bulk moves, status changes, task creation should confirm via
+  snackbar — which is also where Undo lives.
+- **Session expiry is unexplained.** On a 401 the app bounces to Login with no
+  message; user can't tell logout from crash. Show "session expired, sign in
+  again."
+- **Invite code can't be copied or shared.** `InviteCodeDialog` shows the code
+  as plain text; user must transcribe it. Add copy-to-clipboard + system share
+  sheet.
+- **No pull-to-refresh** anywhere; refresh is a toolbar icon only. Material
+  `PullToRefreshBox` on Dashboard + group tabs.
+- **FAB overlaps the last list item** — task/group lists need bottom content
+  padding (~88dp).
+- **Members tab reuses StatusChip for roles**, so "owner" renders raw and
+  lowercase.
+- **No sorting/grouping/filtering of tasks** — done tasks interleave with
+  todos in creation order. At minimum: group by status or sort done-last.
+- **Login lacks show-password toggle; Login "success" card is dead weight**
+  (navigation happens immediately, the message never gets read).
+- **Logout is instant** from an icon that sits next to Refresh — one mis-tap
+  signs you out. Confirm, or move it behind the overflow menu (Dashboard now
+  has one).
+
 ## Also known (raised in passing, not yet triaged)
 
 - **No due-date UI.** The backend stores `due_date`, accepts it on create and
