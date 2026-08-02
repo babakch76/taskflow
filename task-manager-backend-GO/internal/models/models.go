@@ -158,4 +158,18 @@ type GroupWithProgress struct {
 	TotalTasks int     `json:"total_tasks"`
 	DoneTasks  int     `json:"done_tasks"`
 	Progress   float64 `json:"progress"` // 0.0 to 1.0
+	// MyRole is the requesting user's role in this group: "owner", "admin" or
+	// "member". Returned so a client can gate its UI without having to fetch
+	// the member list and work out which row is itself.
+	MyRole string `json:"my_role"`
+}
+
+// UpdateMemberRoleRequest is the body of
+// PATCH /groups/{group_id}/members/{user_id}/role.
+//
+// Only "admin" and "member" are accepted. "owner" is deliberately not a
+// settable value — there is exactly one owner, set at creation, and
+// transferring that is out of scope.
+type UpdateMemberRoleRequest struct {
+	Role string `json:"role"`
 }

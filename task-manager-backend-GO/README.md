@@ -53,7 +53,14 @@ GET    /groups/:group_id/members                             → [members]
 
 # Leave a group (removes only the caller's membership)
 DELETE /groups/:group_id/members/me                          → { message }
+
+# Promote a member to manager, or demote them (OWNER ONLY)
+PATCH  /groups/:group_id/members/:user_id/role  { "role": "admin"|"member" }
 ```
+
+`GET /groups/:group_id` also returns `my_role` — the caller's own role — so a
+client can gate its UI without fetching the member list and working out which
+row is itself.
 
 `DELETE /members/me` has three outcomes:
 
@@ -143,6 +150,38 @@ call fails with `404` and nothing is modified.
 
 A patch with no recognised fields is rejected with
 `400 {"error":"no fields to update"}`.
+
+## Roles and permissions
+
+`group_members.role` is one of `owner`, `admin` or `member`. `admin` is what
+the UI calls **Manager**; the stored value stays `admin` because changing it
+would mean rebuilding the table — SQLite cannot alter a CHECK constraint in
+place — for a purely cosmetic difference.
+
+Exactly one thing is gated by role today:
+
+| Action | owner | admin (manager) | member |
+|---|:--:|:--:|:--:|
+| Set or clear a task's `due_date` | ✅ | ✅ | ❌ 403 |
+| Change another member's role | ✅ | ❌ | ❌ |
+| Everything else (create/edit/delete tasks, invite, leave) | ✅ | ✅ | ✅ |
+
+Deliberately narrow. Broader role-based permissions were deferred pending
+need-finding interviews, so only what was actually asked for is enforced.
+
+Two invariants worth keeping:
+
+- **The owner's role cannot be changed**, including by themselves. There is one
+  owner, set at creation. This matches `LeaveGroup`, which returns 409 when an
+  owner tries to leave a group that still has other members.
+- **The due-date check hangs off whether `due_date` is *present* in the patch**,
+  not off the request as a whole. A member editing only a title is unaffected,
+  because `Patchable.Absent` keeps the key out of the JSON and `Present` stays
+  false. This is the tri-state contract doing real work.
+
+Non-members get `404`; members who lack the role get `403`. The distinction is
+deliberate — a 404 would wrongly imply the group or task doesn't exist to
+someone who can plainly see it.
 
 ## Data Siloing
 

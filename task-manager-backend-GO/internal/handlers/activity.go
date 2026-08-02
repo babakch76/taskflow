@@ -14,13 +14,14 @@ import (
 // Event types written to activity_events. Clients switch on these strings, so
 // treat them as part of the API contract.
 const (
-	EventTaskCreated      = "task_created"
-	EventTaskUpdated      = "task_updated"
-	EventTaskDeleted      = "task_deleted"
-	EventTasksBulkUpdated = "tasks_bulk_updated"
-	EventMemberJoined     = "member_joined"
-	EventMemberLeft       = "member_left"
-	EventInviteAccepted   = "invite_accepted"
+	EventTaskCreated       = "task_created"
+	EventTaskUpdated       = "task_updated"
+	EventTaskDeleted       = "task_deleted"
+	EventTasksBulkUpdated  = "tasks_bulk_updated"
+	EventMemberJoined      = "member_joined"
+	EventMemberLeft        = "member_left"
+	EventInviteAccepted    = "invite_accepted"
+	EventMemberRoleChanged = "member_role_changed"
 )
 
 // execer is satisfied by both *sql.DB (through database.DB) and *sql.Tx, so
