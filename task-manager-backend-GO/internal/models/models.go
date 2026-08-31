@@ -134,6 +134,9 @@ type Occurrence struct {
 	DoneBy     *string    `json:"done_by,omitempty"`
 	DoneAt     *time.Time `json:"done_at,omitempty"`
 	CreatedAt  time.Time  `json:"created_at"`
+	// SpawnedFrom is the occurrence whose completion created this one. Undoing
+	// that completion removes this occurrence again.
+	SpawnedFrom *string `json:"spawned_from,omitempty"`
 
 	// ChoreName and DoneLine are joined in so the board can render a row
 	// without a second round trip per occurrence.

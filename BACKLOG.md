@@ -23,9 +23,10 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
 - **F2 (chores, rotation, spawning) — IN PROGRESS** on `v2-chores`. Both open
   questions settled: chores/occurrences are **new tables alongside `tasks`**
   (existing tasks stay as the spec's one-off type), sliced into **three
-  commits**. Step 1 is done — model, CRUD, and the board reading occurrences.
-  Still to come: spawning the next occurrence on completion (2/3), and the
-  unified turn rule with the debt case (3/3).
+  commits**. Steps 1 and 2 are done — model, CRUD, the board reading
+  occurrences, and completion spawning the next occurrence with the rotation
+  advancing. Still to come: the unified turn rule with the debt case (3/3),
+  which changes who the spawn goes to when the doer isn't the assignee.
 - Multi-select and bulk status were removed with F1. The backend endpoint
   survives, unused by the client.
 

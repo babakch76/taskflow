@@ -163,6 +163,14 @@ func migrate(db *sql.DB) error {
 		done_by     TEXT REFERENCES users(id),
 		done_at     DATETIME,
 		created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+		-- The occurrence whose completion spawned this one, if any.
+		--
+		-- Completing an occurrence creates the next one, and undoing that
+		-- completion has to take the new one away again — otherwise ten
+		-- seconds of misclick leaves a phantom turn on someone's row forever.
+		-- Matching on "the newest open occurrence of this chore" would guess;
+		-- this records it.
+		spawned_from TEXT REFERENCES occurrences(id) ON DELETE SET NULL,
 
 		-- done_by and done_at travel together: either both set (a completion) or
 		-- both NULL (still open, or an undone completion). Neither half alone
@@ -226,6 +234,9 @@ func addMissingColumns(db *sql.DB) error {
 		// afterwards. The doer is not always the assignee.
 		{table: "tasks", name: "done_by", ddl: `ALTER TABLE tasks ADD COLUMN done_by TEXT REFERENCES users(id)`},
 		{table: "tasks", name: "done_at", ddl: `ALTER TABLE tasks ADD COLUMN done_at DATETIME`},
+		// Added while F2 was in progress, so a database created from the first
+		// chore commit picks it up rather than needing to be thrown away.
+		{table: "occurrences", name: "spawned_from", ddl: `ALTER TABLE occurrences ADD COLUMN spawned_from TEXT REFERENCES occurrences(id)`},
 	}
 
 	for _, c := range columns {

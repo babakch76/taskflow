@@ -34,7 +34,7 @@ const choreColumns = `id, group_id, name, done_line, schedule_type, interval_day
 // occurrenceColumns joins the chore's name and done-line in, so one board query
 // returns rows that are renderable as they stand.
 const occurrenceColumns = `o.id, o.chore_id, o.group_id, o.assigned_to, o.status,
-	o.due_date, o.done_by, o.done_at, o.created_at, c.name, c.done_line`
+	o.due_date, o.done_by, o.done_at, o.created_at, o.spawned_from, c.name, c.done_line`
 
 // undoWindow is how long after marking an occurrence done it can still be taken
 // back, and only by the person who marked it. Anything older is history, and
@@ -470,6 +470,13 @@ func (h *ChoreHandler) DeleteChore(w http.ResponseWriter, r *http.Request) {
 func (h *ChoreHandler) ListOccurrences(w http.ResponseWriter, r *http.Request) {
 	groupID := r.PathValue("group_id")
 
+	// A read that writes, deliberately. See rollForwardFixedDates: a failure
+	// is logged rather than surfaced, because a board that renders with a
+	// stale date is far better than a board that refuses to render.
+	if err := h.rollForwardFixedDates(groupID); err != nil {
+		log.Printf("ListOccurrences: fixed-date roll-forward failed for group %s: %v", groupID, err)
+	}
+
 	rows, err := h.DB.Query(`
 		SELECT `+occurrenceColumns+`
 		FROM occurrences o
@@ -515,9 +522,13 @@ func (h *ChoreHandler) ListOccurrences(w http.ResponseWriter, r *http.Request) {
 //
 // Undo is narrower: only the person who marked it, and only inside undoWindow.
 //
-// What this does *not* yet do is spawn the next occurrence or advance the
-// rotation — that is the next commit. Completion is recorded correctly here
-// first, because the spawn rule builds on it.
+// Completing also spawns the chore's next occurrence and advances the rotation
+// — see spawnNext. Undoing removes that spawned occurrence again, so ten
+// seconds of misclick cannot leave a phantom turn behind.
+//
+// The whole thing runs in one transaction: a completion that recorded itself
+// but failed to spawn would silently end a chore's rotation, and the chore
+// would just never come round again.
 func (h *ChoreHandler) UpdateOccurrence(w http.ResponseWriter, r *http.Request) {
 	groupID := r.PathValue("group_id")
 	occurrenceID := r.PathValue("occurrence_id")
@@ -536,15 +547,17 @@ func (h *ChoreHandler) UpdateOccurrence(w http.ResponseWriter, r *http.Request) 
 	var (
 		existingGroupID string
 		status          string
+		assignedTo      string
+		choreID         string
 		choreName       string
 		doneBy          sql.NullString
 		doneAt          sql.NullTime
 	)
 	err := h.DB.QueryRow(`
-		SELECT o.group_id, o.status, o.done_by, o.done_at, c.name
+		SELECT o.group_id, o.status, o.assigned_to, o.chore_id, o.done_by, o.done_at, c.name
 		FROM occurrences o JOIN chores c ON c.id = o.chore_id
 		WHERE o.id = ?`, occurrenceID,
-	).Scan(&existingGroupID, &status, &doneBy, &doneAt, &choreName)
+	).Scan(&existingGroupID, &status, &assignedTo, &choreID, &doneBy, &doneAt, &choreName)
 	if err == sql.ErrNoRows || existingGroupID != groupID {
 		jsonError(w, "occurrence not found", http.StatusNotFound)
 		return
@@ -559,18 +572,9 @@ func (h *ChoreHandler) UpdateOccurrence(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	var eventType string
-	if req.Status == models.OccurrenceDone {
-		if _, err := h.DB.Exec(
-			`UPDATE occurrences SET status = 'done', done_by = ?, done_at = CURRENT_TIMESTAMP WHERE id = ?`,
-			userID, occurrenceID,
-		); err != nil {
-			jsonError(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		eventType = EventOccurrenceDone
-	} else {
-		// Undo. Both halves of the rule are enforced here, not just in the UI.
+	// Undo's two conditions are checked before opening the transaction, so a
+	// refusal costs nothing and the error is the same either way.
+	if req.Status == models.OccurrenceOpen {
 		if !doneBy.Valid || doneBy.String != userID {
 			jsonError(w, "only the person who marked this done can undo it", http.StatusForbidden)
 			return
@@ -579,7 +583,49 @@ func (h *ChoreHandler) UpdateOccurrence(w http.ResponseWriter, r *http.Request) 
 			jsonError(w, "the undo window has passed", http.StatusForbidden)
 			return
 		}
-		if _, err := h.DB.Exec(
+	}
+
+	chore, err := h.loadChore(choreID)
+	if err != nil {
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	tx, err := h.DB.Begin()
+	if err != nil {
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback()
+
+	var eventType string
+	if req.Status == models.OccurrenceDone {
+		completedAt := time.Now()
+		if _, err := tx.Exec(
+			`UPDATE occurrences SET status = 'done', done_by = ?, done_at = ? WHERE id = ?`,
+			userID, completedAt.UTC(), occurrenceID,
+		); err != nil {
+			jsonError(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if err := spawnNext(tx, chore, occurrenceID, assignedTo, userID, completedAt); err != nil {
+			log.Printf("UpdateOccurrence: spawn failed for chore %s: %v", choreID, err)
+			jsonError(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		eventType = EventOccurrenceDone
+	} else {
+		// Take the spawned occurrence away with the completion that created it.
+		// Only if it is still open: if someone has already completed the next
+		// turn, deleting it would erase their work to undo yours.
+		if _, err := tx.Exec(
+			`DELETE FROM occurrences WHERE spawned_from = ? AND status = 'open'`,
+			occurrenceID,
+		); err != nil {
+			jsonError(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if _, err := tx.Exec(
 			`UPDATE occurrences SET status = 'open', done_by = NULL, done_at = NULL WHERE id = ?`,
 			occurrenceID,
 		); err != nil {
@@ -589,8 +635,14 @@ func (h *ChoreHandler) UpdateOccurrence(w http.ResponseWriter, r *http.Request) 
 		eventType = EventOccurrenceReopened
 	}
 
-	if err := recordActivity(h.DB, groupID, userID, eventType, &occurrenceID, choreName); err != nil {
-		logActivityFailure(eventType, err)
+	if err := recordActivity(tx, groupID, userID, eventType, &occurrenceID, choreName); err != nil {
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
 	}
 
 	updated, err := h.loadOccurrence(occurrenceID)
@@ -599,6 +651,150 @@ func (h *ChoreHandler) UpdateOccurrence(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	jsonResponse(w, http.StatusOK, updated)
+}
+
+// rollForwardFixedDates moves an open fixed-date occurrence whose date has
+// passed on to the next date in its schedule, **keeping the same assignee**.
+//
+// This is the spec's "a missed date rolls into the next one, same assignee —
+// you keep the chore until you've actually done it once". The bin collection
+// you missed on Tuesday becomes next Tuesday's, still yours: the date the world
+// set has moved on, but the turn has not, because a turn only moves on when the
+// chore is actually done.
+//
+// Two things it must never do, both of which would break the turn rule:
+// reassign, or mark anything done. It only ever writes due_date.
+//
+// It runs on read rather than from a scheduler because there is no scheduler in
+// this project, and a chore whose date rolls only when someone looks at the
+// board is indistinguishable — from the board — from one that rolled at
+// midnight. It is idempotent: a second call finds nothing past due.
+func (h *ChoreHandler) rollForwardFixedDates(groupID string) error {
+	now := time.Now()
+
+	rows, err := h.DB.Query(`
+		SELECT o.id, c.fixed_weekdays, c.fixed_month_days, c.needed_by_time
+		FROM occurrences o
+		JOIN chores c ON c.id = o.chore_id
+		WHERE o.group_id = ?
+		  AND o.status = 'open'
+		  AND c.schedule_type = 'fixed_date'
+		  AND o.due_date IS NOT NULL
+		  AND o.due_date < ?`,
+		groupID, now.UTC(),
+	)
+	if err != nil {
+		return err
+	}
+
+	type update struct {
+		id  string
+		due time.Time
+	}
+	pending := []update{}
+
+	for rows.Next() {
+		var (
+			id                  string
+			weekdays, monthDays sql.NullString
+			neededBy            *string
+		)
+		if err := rows.Scan(&id, &weekdays, &monthDays, &neededBy); err != nil {
+			rows.Close()
+			return err
+		}
+		next := nextFixedDate(decodeInts(weekdays), decodeInts(monthDays), neededBy, now)
+		if next == nil {
+			continue
+		}
+		pending = append(pending, update{id: id, due: *next})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	for _, u := range pending {
+		if _, err := h.DB.Exec(`UPDATE occurrences SET due_date = ? WHERE id = ?`, u.due, u.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// spawnNext creates the occurrence that follows a completed one.
+//
+// Rotation advances **on completion, never on the calendar** — this function is
+// the only place a turn moves on. An occurrence left undone simply stays where
+// it is, which is what makes a turn impossible to wait out.
+//
+// A one-off has nothing to spawn: it is the whole of its own schedule.
+//
+// The assignee here is "the next person after whoever held it". That is the
+// simple case, and it is deliberately not the final rule: an occurrence
+// completed by someone *other* than its assignee counts as the doer's turn, and
+// the next one goes back to the original assignee. That is the unified turn
+// rule, and it lands in the next commit — doerID is already threaded through
+// for it.
+func spawnNext(tx *sql.Tx, chore *models.Chore, completedID, assignedTo, doerID string, completedAt time.Time) error {
+	if chore.ScheduleType == models.ScheduleOneOff {
+		return nil
+	}
+	if len(chore.Rotation) == 0 {
+		// Can't happen through the API — a rotation must hold at least one
+		// member — but a chore with nobody in it has no one to assign to, and
+		// silently dropping the chore is better than a broken row.
+		return nil
+	}
+
+	next := models.Occurrence{
+		ID:          uuid.New().String(),
+		ChoreID:     chore.ID,
+		GroupID:     chore.GroupID,
+		AssignedTo:  nextInRotation(chore.Rotation, assignedTo),
+		Status:      models.OccurrenceOpen,
+		DueDate:     nextDueDate(chore, completedAt),
+		SpawnedFrom: &completedID,
+	}
+	return insertOccurrence(tx, next)
+}
+
+// nextInRotation returns whoever's turn follows the current holder's.
+//
+// If the holder is no longer in the rotation — they were edited out, or left
+// the group — the turn starts again at the top rather than being lost.
+func nextInRotation(rotation []string, current string) string {
+	for i, userID := range rotation {
+		if userID == current {
+			return rotation[(i+1)%len(rotation)]
+		}
+	}
+	return rotation[0]
+}
+
+// nextDueDate is when the chore is next due, given when it was just completed.
+//
+// Interval chores count from the **completion**, not from the old due date:
+// the bathroom needs cleaning four days after it was last cleaned, not four
+// days after it was supposed to be. Doing it late moves the whole schedule with
+// reality, which is the point.
+//
+// Fixed-date chores take the next date off the calendar, because the world sets
+// those. As-needed chores have no date at all.
+func nextDueDate(chore *models.Chore, completedAt time.Time) *time.Time {
+	switch chore.ScheduleType {
+	case models.ScheduleInterval:
+		if chore.IntervalDays == nil {
+			return nil
+		}
+		due := atClockTime(completedAt.AddDate(0, 0, *chore.IntervalDays), chore.NeededByTime)
+		return &due
+	case models.ScheduleFixedDate:
+		return nextFixedDate(chore.FixedWeekdays, chore.FixedMonthDays, chore.NeededByTime, completedAt)
+	default:
+		return nil
+	}
 }
 
 // ── Loading helpers ─────────────────────────────────────────────────────────
@@ -619,7 +815,8 @@ func scanChore(s scanner, c *models.Chore) error {
 func scanOccurrence(s scanner, o *models.Occurrence) error {
 	return s.Scan(
 		&o.ID, &o.ChoreID, &o.GroupID, &o.AssignedTo, &o.Status,
-		&o.DueDate, &o.DoneBy, &o.DoneAt, &o.CreatedAt, &o.ChoreName, &o.DoneLine,
+		&o.DueDate, &o.DoneBy, &o.DoneAt, &o.CreatedAt, &o.SpawnedFrom,
+		&o.ChoreName, &o.DoneLine,
 	)
 }
 
@@ -727,9 +924,9 @@ func replaceRotation(tx *sql.Tx, choreID string, rotation []string) error {
 
 func insertOccurrence(tx *sql.Tx, o models.Occurrence) error {
 	_, err := tx.Exec(
-		`INSERT INTO occurrences (id, chore_id, group_id, assigned_to, status, due_date, created_at)
-		 VALUES (?,?,?,?,?,?,CURRENT_TIMESTAMP)`,
-		o.ID, o.ChoreID, o.GroupID, o.AssignedTo, o.Status, o.DueDate,
+		`INSERT INTO occurrences (id, chore_id, group_id, assigned_to, status, due_date, spawned_from, created_at)
+		 VALUES (?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`,
+		o.ID, o.ChoreID, o.GroupID, o.AssignedTo, o.Status, o.DueDate, o.SpawnedFrom,
 	)
 	return err
 }
