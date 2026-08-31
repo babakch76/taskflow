@@ -16,6 +16,16 @@ import retrofit2.http.*
  */
 interface GroupApiService {
 
+    // ─── The signed-in user ───────────────────────────────────
+
+    /** The caller's own account, including their quiet-hours window (F3). */
+    @GET("me")
+    suspend fun getMe(): Response<User>
+
+    /** Move either end of the quiet-hours window. */
+    @PATCH("me")
+    suspend fun updateMe(@Body request: UpdateMeRequest): Response<User>
+
     // ─── Groups ───────────────────────────────────────────────
 
     @POST("groups")

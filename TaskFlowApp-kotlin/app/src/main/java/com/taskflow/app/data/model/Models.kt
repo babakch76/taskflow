@@ -13,6 +13,18 @@ data class User(
     val email: String,
     @SerializedName("created_at")
     val createdAt: OffsetDateTime? = null,
+    /**
+     * Quiet hours, "HH:MM" (F3). A reminder that would land inside this window
+     * waits until [quietTo]. Normally wraps midnight.
+     *
+     * Defaulted here as well as in the schema so a response from an older
+     * server — or any path that omits them — still yields a usable window
+     * rather than an empty string the scheduler would have to guess about.
+     */
+    @SerializedName("quiet_from")
+    val quietFrom: String = "21:00",
+    @SerializedName("quiet_to")
+    val quietTo: String = "09:00",
 )
 
 data class Group(
@@ -368,6 +380,17 @@ data class UpdateChoreRequest(
  */
 data class UpdateOccurrenceRequest(
     val status: String,   // "open" or "done"
+)
+
+/**
+ * Body for PATCH /me. Either end of the quiet-hours window can be moved without
+ * restating the other; the server refuses a patch that leaves both equal.
+ */
+data class UpdateMeRequest(
+    @SerializedName("quiet_from")
+    val quietFrom: String? = null,
+    @SerializedName("quiet_to")
+    val quietTo: String? = null,
 )
 
 data class InviteByUsernameRequest(
