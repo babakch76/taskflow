@@ -5,6 +5,23 @@ things turn up; keep the newest reports at the top of each section.
 
 Status key: **OPEN** · **IN PROGRESS** · **DONE**
 
+> **The project pivoted on 2026-08-21** to the household chore-rotation app in
+> `taskflow_feature_spec_2.md`. Read **[V2-HANDOFF.md](V2-HANDOFF.md)** first —
+> several items below were resolved by that spec rather than by being fixed,
+> and some (bulk status, three-state status) are now non-goals.
+
+## v2 progress
+
+- **Manager role + deadline permissions — REMOVED.** The spec makes chore
+  editing open to every member, so the gate contradicted it.
+- **F1 (Board) — DONE**, not yet device-verified. Yours/Others/Done sections,
+  `done_by`/`done_at` persisted, one-tap completion with a 10-minute undo,
+  amber overdue, single-group users land on the board.
+- **F2 (chores, rotation, spawning) — NEXT.** Two open questions in the
+  handoff; goes on a `v2-chores` branch.
+- Multi-select and bulk status were removed with F1. The backend endpoint
+  survives, unused by the client.
+
 ---
 
 ## Bugs
