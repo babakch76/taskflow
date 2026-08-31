@@ -5,13 +5,18 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.taskflow.app.data.model.ActivityEvent
 import com.taskflow.app.data.model.BulkUpdateTaskStatusRequest
+import com.taskflow.app.data.model.Chore
+import com.taskflow.app.data.model.CreateChoreRequest
 import com.taskflow.app.data.model.CreateTaskRequest
 import com.taskflow.app.data.model.GroupWithProgress
 import com.taskflow.app.data.model.InviteByUsernameRequest
 import com.taskflow.app.data.model.MemberInfo
+import com.taskflow.app.data.model.Occurrence
 import com.taskflow.app.data.model.Patchable
 import com.taskflow.app.data.model.Task
+import com.taskflow.app.data.model.UpdateOccurrenceRequest
 import com.taskflow.app.data.model.UpdateTaskRequest
+import com.taskflow.app.data.model.isOpen
 import com.taskflow.app.data.remote.ApiErrors
 import com.taskflow.app.data.remote.RetrofitClient
 import kotlinx.coroutines.async
@@ -40,6 +45,14 @@ data class GroupDetailUiState(
     val isWorking: Boolean = false,
     val group: GroupWithProgress? = null,
     val tasks: List<Task> = emptyList(),
+    /**
+     * The chore model's half of the board (F2). Occurrences and tasks are shown
+     * together: tasks predate the chore model and are the spec's "one-off"
+     * shape, so they stay on the board rather than being hidden or migrated.
+     */
+    val occurrences: List<Occurrence> = emptyList(),
+    /** Chore definitions, for rendering a schedule and for editing. */
+    val chores: List<Chore> = emptyList(),
     val members: List<MemberInfo> = emptyList(),
     val activity: List<ActivityEvent> = emptyList(),
     /** Fatal error for the whole screen — shows the retry state. */
@@ -87,15 +100,19 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
 
-            // Four independent endpoints — fire them together rather than
-            // serially, so opening the screen costs one round trip, not four.
+            // Six independent endpoints — fire them together rather than
+            // serially, so opening the screen costs one round trip, not six.
             val groupDeferred = async { runCatching { api.getGroup(groupId) } }
             val tasksDeferred = async { runCatching { api.listTasks(groupId) } }
+            val occurrencesDeferred = async { runCatching { api.listOccurrences(groupId) } }
+            val choresDeferred = async { runCatching { api.listChores(groupId) } }
             val membersDeferred = async { runCatching { api.listMembers(groupId) } }
             val activityDeferred = async { runCatching { api.listActivity(groupId) } }
 
             val groupRes = groupDeferred.await()
             val tasksRes = tasksDeferred.await()
+            val occurrencesRes = occurrencesDeferred.await()
+            val choresRes = choresDeferred.await()
             val membersRes = membersDeferred.await()
             val activityRes = activityDeferred.await()
 
@@ -121,6 +138,8 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
                 error = null,
                 group = group.body(),
                 tasks = tasksRes.getOrNull()?.takeIf { it.isSuccessful }?.body().orEmpty(),
+                occurrences = occurrencesRes.getOrNull()?.takeIf { it.isSuccessful }?.body().orEmpty(),
+                chores = choresRes.getOrNull()?.takeIf { it.isSuccessful }?.body().orEmpty(),
                 members = membersRes.getOrNull()?.takeIf { it.isSuccessful }?.body().orEmpty(),
                 activity = activity,
             )
@@ -156,6 +175,14 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
         runCatching { api.listTasks(groupId) }.getOrNull()
             ?.takeIf { it.isSuccessful }?.body()
             ?.let { _uiState.value = _uiState.value.copy(tasks = it) }
+        // The board is both halves, so a poll that only refreshed tasks would
+        // leave a housemate's completed chore sitting on the screen as open.
+        runCatching { api.listOccurrences(groupId) }.getOrNull()
+            ?.takeIf { it.isSuccessful }?.body()
+            ?.let { _uiState.value = _uiState.value.copy(occurrences = it) }
+        runCatching { api.listChores(groupId) }.getOrNull()
+            ?.takeIf { it.isSuccessful }?.body()
+            ?.let { _uiState.value = _uiState.value.copy(chores = it) }
         runCatching { api.getGroup(groupId) }.getOrNull()
             ?.takeIf { it.isSuccessful }?.body()
             ?.let { _uiState.value = _uiState.value.copy(group = it) }
@@ -324,6 +351,55 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
      * state is the backend's, and a local edit would paper over a teammate's
      * concurrent change.
      */
+    // ─── Chores and occurrences (F2) ────────────────────────────
+
+    /**
+     * Define a chore. The backend creates its first occurrence too, so it
+     * appears on the board immediately, on the row of whoever is first in
+     * [rotation].
+     */
+    fun createChore(
+        name: String,
+        doneLine: String,
+        scheduleType: String,
+        intervalDays: Int?,
+        fixedWeekdays: List<Int>?,
+        rotation: List<String>,
+    ) {
+        runAction(successMessage = "Chore added") {
+            api.createChore(
+                groupId,
+                CreateChoreRequest(
+                    name = name.trim(),
+                    doneLine = doneLine.trim(),
+                    scheduleType = scheduleType,
+                    intervalDays = intervalDays,
+                    fixedWeekdays = fixedWeekdays,
+                    rotation = rotation,
+                ),
+            )
+        }
+    }
+
+    /**
+     * One-tap completion, and its undo.
+     *
+     * Anyone may tick anything — done_by records who actually did it. Undo goes
+     * back to the same endpoint with "open"; the server refuses it with 403
+     * unless the caller marked it and is inside the ten-minute window, so a
+     * stale screen produces a clear message rather than a silent no-op.
+     */
+    fun toggleOccurrenceDone(occurrence: Occurrence) {
+        val target = if (occurrence.isOpen) "done" else "open"
+        runAction(successMessage = if (target == "done") "Marked done" else "Completion undone") {
+            api.updateOccurrence(groupId, occurrence.id, UpdateOccurrenceRequest(status = target))
+        }
+    }
+
+    fun deleteChore(choreId: String) {
+        runAction(successMessage = "Chore deleted") { api.deleteChore(groupId, choreId) }
+    }
+
     private fun runAction(
         successMessage: String? = null,
         block: suspend () -> Response<*>,

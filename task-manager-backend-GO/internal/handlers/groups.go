@@ -93,9 +93,17 @@ func (h *GroupHandler) GetGroup(w http.ResponseWriter, r *http.Request) {
 	// Compute progress for the progress bar widget. A failure here must not be
 	// swallowed: the zero values would render as "0 tasks, 0% done", which is
 	// indistinguishable from a genuinely empty group.
+	//
+	// Both halves of the board are counted. Tasks alone would under-report the
+	// moment a group has chores — the header would say "1 of 5" over a screen
+	// showing eight rows, which is worse than no counter at all.
 	if err := h.DB.QueryRow(
-		`SELECT COUNT(*), COALESCE(SUM(CASE WHEN status='done' THEN 1 ELSE 0 END), 0) FROM tasks WHERE group_id = ?`,
-		groupID,
+		`SELECT
+			(SELECT COUNT(*) FROM tasks WHERE group_id = ?) +
+			(SELECT COUNT(*) FROM occurrences WHERE group_id = ?),
+			(SELECT COALESCE(SUM(CASE WHEN status='done' THEN 1 ELSE 0 END), 0) FROM tasks WHERE group_id = ?) +
+			(SELECT COALESCE(SUM(CASE WHEN status='done' THEN 1 ELSE 0 END), 0) FROM occurrences WHERE group_id = ?)`,
+		groupID, groupID, groupID, groupID,
 	).Scan(&g.TotalTasks, &g.DoneTasks); err != nil {
 		log.Printf("GetGroup: progress scan failed for group %s: %v", groupID, err)
 		jsonError(w, "internal error", http.StatusInternalServerError)

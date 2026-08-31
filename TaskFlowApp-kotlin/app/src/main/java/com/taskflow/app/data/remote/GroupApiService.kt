@@ -123,4 +123,56 @@ interface GroupApiService {
         @Path("group_id") groupId: String,
         @Path("task_id") taskId: String,
     ): Response<Unit>
+
+    // ─── Chores and occurrences (F2) ──────────────────────────
+
+    /**
+     * Define a chore. The backend also creates its first occurrence, assigned
+     * to position 0 of the rotation, so the chore appears on the board at once.
+     */
+    @POST("groups/{group_id}/chores")
+    suspend fun createChore(
+        @Path("group_id") groupId: String,
+        @Body request: CreateChoreRequest,
+    ): Response<Chore>
+
+    /** The chore *definitions* and their rotation lists. The board reads occurrences instead. */
+    @GET("groups/{group_id}/chores")
+    suspend fun listChores(@Path("group_id") groupId: String): Response<List<Chore>>
+
+    /**
+     * Edit a chore. Open to every member by design; the whole group sees a diff
+     * of what changed in the activity feed.
+     */
+    @PATCH("groups/{group_id}/chores/{chore_id}")
+    suspend fun updateChore(
+        @Path("group_id") groupId: String,
+        @Path("chore_id") choreId: String,
+        @Body request: UpdateChoreRequest,
+    ): Response<Chore>
+
+    @DELETE("groups/{group_id}/chores/{chore_id}")
+    suspend fun deleteChore(
+        @Path("group_id") groupId: String,
+        @Path("chore_id") choreId: String,
+    ): Response<Unit>
+
+    /** Everything the board shows: open occurrences first, oldest due date first. */
+    @GET("groups/{group_id}/occurrences")
+    suspend fun listOccurrences(@Path("group_id") groupId: String): Response<List<Occurrence>>
+
+    /**
+     * Mark an occurrence done, or undo that.
+     *
+     * Any member may complete any occurrence. Undo is refused with 403 unless
+     * the caller is the person who marked it and is inside the ten-minute
+     * window — the client greys the control out on the same rule, but the
+     * server is what enforces it.
+     */
+    @PATCH("groups/{group_id}/occurrences/{occurrence_id}")
+    suspend fun updateOccurrence(
+        @Path("group_id") groupId: String,
+        @Path("occurrence_id") occurrenceId: String,
+        @Body request: UpdateOccurrenceRequest,
+    ): Response<Occurrence>
 }
