@@ -47,7 +47,15 @@ func migrate(db *sql.DB) error {
 		username      TEXT UNIQUE NOT NULL,
 		email         TEXT UNIQUE NOT NULL,
 		password_hash TEXT NOT NULL,
-		created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+		created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+		-- Quiet hours, "HH:MM", per user (F3). A reminder that would land
+		-- inside this window is held until the next allowed moment.
+		--
+		-- The default window wraps midnight, which is the normal case and the
+		-- one the arithmetic has to get right: 21:00 to 09:00 is "late evening
+		-- until morning", not an empty range.
+		quiet_from    TEXT NOT NULL DEFAULT '21:00',
+		quiet_to      TEXT NOT NULL DEFAULT '09:00'
 	);
 
 	CREATE TABLE IF NOT EXISTS groups (
@@ -249,6 +257,11 @@ func addMissingColumns(db *sql.DB) error {
 		// chore commit picks it up rather than needing to be thrown away.
 		{table: "occurrences", name: "spawned_from", ddl: `ALTER TABLE occurrences ADD COLUMN spawned_from TEXT REFERENCES occurrences(id)`},
 		{table: "occurrences", name: "resume_after", ddl: `ALTER TABLE occurrences ADD COLUMN resume_after TEXT REFERENCES users(id)`},
+		// F3. A literal is a constant default, so unlike updated_at these can be
+		// added NOT NULL and existing users get the standard window rather than
+		// a NULL that every caller would have to interpret.
+		{table: "users", name: "quiet_from", ddl: `ALTER TABLE users ADD COLUMN quiet_from TEXT NOT NULL DEFAULT '21:00'`},
+		{table: "users", name: "quiet_to", ddl: `ALTER TABLE users ADD COLUMN quiet_to TEXT NOT NULL DEFAULT '09:00'`},
 	}
 
 	for _, c := range columns {

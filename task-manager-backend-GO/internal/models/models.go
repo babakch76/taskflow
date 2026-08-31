@@ -12,6 +12,24 @@ type User struct {
 	Email        string    `json:"email"`
 	PasswordHash string    `json:"-"`
 	CreatedAt    time.Time `json:"created_at"`
+	// Quiet hours, "HH:MM" (F3). A reminder that would land inside the window
+	// waits for QuietTo. The window normally wraps midnight.
+	QuietFrom string `json:"quiet_from"`
+	QuietTo   string `json:"quiet_to"`
+}
+
+// Default quiet hours: the 11pm finding — a reminder you cannot act on is a
+// reminder you will forget.
+const (
+	DefaultQuietFrom = "21:00"
+	DefaultQuietTo   = "09:00"
+)
+
+// UpdateMeRequest changes the caller's own settings. Only quiet hours for now;
+// both are optional so one can be set without the other.
+type UpdateMeRequest struct {
+	QuietFrom *string `json:"quiet_from,omitempty"`
+	QuietTo   *string `json:"quiet_to,omitempty"`
 }
 
 type Group struct {
