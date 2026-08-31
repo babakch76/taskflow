@@ -14,17 +14,46 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
 
 - **Manager role + deadline permissions — REMOVED.** The spec makes chore
   editing open to every member, so the gate contradicted it.
-- **F1 (Board) — DONE**, not yet device-verified. Yours/Others/Done sections,
-  `done_by`/`done_at` persisted, one-tap completion with a 10-minute undo,
-  amber overdue, single-group users land on the board.
-- **F2 (chores, rotation, spawning) — NEXT.** Two open questions in the
-  handoff; goes on a `v2-chores` branch.
+- **F1 (Board) — DONE and device-verified** (2026-08-31). Driven on the emulator
+  against a local backend: the three sections, single-group auto-open and its
+  Back behaviour, one-tap completion by a non-assignee with `done_by` recorded,
+  undo restricted to the doer (another member's completed row is greyed and
+  sends no request), and amber — not red — overdue. See B-6 for the one defect
+  this turned up.
+- **F2 (chores, rotation, spawning) — IN PROGRESS** on `v2-chores`. Both open
+  questions settled: chores/occurrences are **new tables alongside `tasks`**
+  (existing tasks stay as the spec's one-off type), sliced into **three
+  commits**. Step 1 is done — model, CRUD, and the board reading occurrences.
+  Still to come: spawning the next occurrence on completion (2/3), and the
+  unified turn rule with the debt case (3/3).
 - Multi-select and bulk status were removed with F1. The backend endpoint
   survives, unused by the client.
 
 ---
 
 ## Bugs
+
+### B-6 · The undo window doesn't close on its own — OPEN
+
+**Reported:** 2026-08-31, while device-verifying F1.
+
+`canUndo` in `GroupDetailScreen.kt` (~line 600) calls `OffsetDateTime.now()`
+during composition, with nothing to trigger a recomposition when the ten
+minutes elapse. The checkbox therefore stays enabled past the window until
+something else recomposes the row — a poll, a refresh, or leaving and coming
+back.
+
+**Not a permissions hole.** The `doneBy == myUserId` half is correct, and since
+F2 the *server* enforces both halves (403 "the undo window has passed"), so a
+stale screen produces a clear error rather than a silent rewrite. What's wrong
+is only that the control looks available when it isn't.
+
+**Fix:** drive it from a ticker rather than from composition — a `produceState`
+that re-evaluates once a minute while a done row is on screen, or recompute
+against a clock the ViewModel already updates. Cheap either way; it was left
+alone so F1's verification pass didn't turn into a refactor.
+
+---
 
 ### B-1 · Invite list can't scroll past ~6 entries — DONE (round 1)
 
