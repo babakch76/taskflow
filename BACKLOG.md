@@ -20,13 +20,18 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
   undo restricted to the doer (another member's completed row is greyed and
   sends no request), and amber — not red — overdue. See B-6 for the one defect
   this turned up.
-- **F2 (chores, rotation, spawning) — IN PROGRESS** on `v2-chores`. Both open
-  questions settled: chores/occurrences are **new tables alongside `tasks`**
-  (existing tasks stay as the spec's one-off type), sliced into **three
-  commits**. Steps 1 and 2 are done — model, CRUD, the board reading
-  occurrences, and completion spawning the next occurrence with the rotation
-  advancing. Still to come: the unified turn rule with the debt case (3/3),
-  which changes who the spawn goes to when the doer isn't the assignee.
+- **F2 (chores, rotation, spawning) — DONE** on `v2-chores`, in three commits.
+  Both open questions were settled first: chores/occurrences are **new tables
+  alongside `tasks`** (existing tasks stay as the spec's one-off type). What
+  landed: the chore/occurrence model with CRUD and the board reading it;
+  completion spawning the next occurrence, interval dates counted from the
+  completion, and a missed fixed date rolling forward with the same assignee;
+  and the unified turn rule — a cover counts as the doer's turn, the chore goes
+  back to whoever owed it, and the rotation resumes after the coverer.
+  Device-verified at each step.
+- **F3 (reminders + quiet hours) — NEXT** per the spec's build order. It closes
+  the existing backend notification TODO. Note F5's busy pass is the other
+  consumer of the turn rule, and `resume_after` already carries what it needs.
 - Multi-select and bulk status were removed with F1. The backend endpoint
   survives, unused by the client.
 

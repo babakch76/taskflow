@@ -34,7 +34,8 @@ const choreColumns = `id, group_id, name, done_line, schedule_type, interval_day
 // occurrenceColumns joins the chore's name and done-line in, so one board query
 // returns rows that are renderable as they stand.
 const occurrenceColumns = `o.id, o.chore_id, o.group_id, o.assigned_to, o.status,
-	o.due_date, o.done_by, o.done_at, o.created_at, o.spawned_from, c.name, c.done_line`
+	o.due_date, o.done_by, o.done_at, o.created_at, o.spawned_from, o.resume_after,
+	c.name, c.done_line`
 
 // undoWindow is how long after marking an occurrence done it can still be taken
 // back, and only by the person who marked it. Anything older is history, and
@@ -544,21 +545,8 @@ func (h *ChoreHandler) UpdateOccurrence(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	var (
-		existingGroupID string
-		status          string
-		assignedTo      string
-		choreID         string
-		choreName       string
-		doneBy          sql.NullString
-		doneAt          sql.NullTime
-	)
-	err := h.DB.QueryRow(`
-		SELECT o.group_id, o.status, o.assigned_to, o.chore_id, o.done_by, o.done_at, c.name
-		FROM occurrences o JOIN chores c ON c.id = o.chore_id
-		WHERE o.id = ?`, occurrenceID,
-	).Scan(&existingGroupID, &status, &assignedTo, &choreID, &doneBy, &doneAt, &choreName)
-	if err == sql.ErrNoRows || existingGroupID != groupID {
+	current, err := h.loadOccurrence(occurrenceID)
+	if err == sql.ErrNoRows || (current != nil && current.GroupID != groupID) {
 		jsonError(w, "occurrence not found", http.StatusNotFound)
 		return
 	}
@@ -567,25 +555,25 @@ func (h *ChoreHandler) UpdateOccurrence(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if req.Status == status {
-		jsonError(w, "occurrence is already "+status, http.StatusConflict)
+	if req.Status == current.Status {
+		jsonError(w, "occurrence is already "+current.Status, http.StatusConflict)
 		return
 	}
 
 	// Undo's two conditions are checked before opening the transaction, so a
 	// refusal costs nothing and the error is the same either way.
 	if req.Status == models.OccurrenceOpen {
-		if !doneBy.Valid || doneBy.String != userID {
+		if current.DoneBy == nil || *current.DoneBy != userID {
 			jsonError(w, "only the person who marked this done can undo it", http.StatusForbidden)
 			return
 		}
-		if !doneAt.Valid || time.Since(doneAt.Time) > undoWindow {
+		if current.DoneAt == nil || time.Since(*current.DoneAt) > undoWindow {
 			jsonError(w, "the undo window has passed", http.StatusForbidden)
 			return
 		}
 	}
 
-	chore, err := h.loadChore(choreID)
+	chore, err := h.loadChore(current.ChoreID)
 	if err != nil {
 		jsonError(w, "internal error", http.StatusInternalServerError)
 		return
@@ -608,8 +596,8 @@ func (h *ChoreHandler) UpdateOccurrence(w http.ResponseWriter, r *http.Request) 
 			jsonError(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		if err := spawnNext(tx, chore, occurrenceID, assignedTo, userID, completedAt); err != nil {
-			log.Printf("UpdateOccurrence: spawn failed for chore %s: %v", choreID, err)
+		if err := spawnNext(tx, chore, current, userID, completedAt); err != nil {
+			log.Printf("UpdateOccurrence: spawn failed for chore %s: %v", current.ChoreID, err)
 			jsonError(w, "internal error", http.StatusInternalServerError)
 			return
 		}
@@ -635,7 +623,7 @@ func (h *ChoreHandler) UpdateOccurrence(w http.ResponseWriter, r *http.Request) 
 		eventType = EventOccurrenceReopened
 	}
 
-	if err := recordActivity(tx, groupID, userID, eventType, &occurrenceID, choreName); err != nil {
+	if err := recordActivity(tx, groupID, userID, eventType, &occurrenceID, current.ChoreName); err != nil {
 		jsonError(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -731,13 +719,8 @@ func (h *ChoreHandler) rollForwardFixedDates(groupID string) error {
 //
 // A one-off has nothing to spawn: it is the whole of its own schedule.
 //
-// The assignee here is "the next person after whoever held it". That is the
-// simple case, and it is deliberately not the final rule: an occurrence
-// completed by someone *other* than its assignee counts as the doer's turn, and
-// the next one goes back to the original assignee. That is the unified turn
-// rule, and it lands in the next commit — doerID is already threaded through
-// for it.
-func spawnNext(tx *sql.Tx, chore *models.Chore, completedID, assignedTo, doerID string, completedAt time.Time) error {
+// Who gets the next turn is decided by nextTurn — the unified turn rule.
+func spawnNext(tx *sql.Tx, chore *models.Chore, completed *models.Occurrence, doerID string, completedAt time.Time) error {
 	if chore.ScheduleType == models.ScheduleOneOff {
 		return nil
 	}
@@ -748,16 +731,67 @@ func spawnNext(tx *sql.Tx, chore *models.Chore, completedID, assignedTo, doerID 
 		return nil
 	}
 
+	assignee, resumeAfter := nextTurn(chore.Rotation, completed, doerID)
+
 	next := models.Occurrence{
 		ID:          uuid.New().String(),
 		ChoreID:     chore.ID,
 		GroupID:     chore.GroupID,
-		AssignedTo:  nextInRotation(chore.Rotation, assignedTo),
+		AssignedTo:  assignee,
 		Status:      models.OccurrenceOpen,
 		DueDate:     nextDueDate(chore, completedAt),
-		SpawnedFrom: &completedID,
+		SpawnedFrom: &completed.ID,
+		ResumeAfter: resumeAfter,
 	}
 	return insertOccurrence(tx, next)
+}
+
+// nextTurn is **the unified turn rule**, and it is the heart of F2.
+//
+// One rule covers three situations the spec treats as the same thing — a
+// housemate quietly doing someone else's chore, a busy pass (F5), and the
+// overflowing bin somebody else finally emptied:
+//
+//   - Completed by the person it was assigned to → the turn moves on normally,
+//     to whoever follows in the rotation.
+//
+//   - Completed by anyone else → **it counted as the doer's turn**. The next
+//     occurrence goes back to the original assignee, who still owes one, and
+//     the rotation resumes after the doer rather than after the assignee.
+//
+// The second case is what stops a turn being waited out. Doing nothing while
+// somebody else gives in and does it does not move your name along; the chore
+// comes straight back to you. The net effect of a cover is a one-cycle swap
+// between the two people, which is why it needs no ledger and no apology.
+//
+// Worked example, rotation [ann, bo, cass], ann's turn, bo does it:
+//
+//	turn 1  ann   → bo completes it. Counted as bo's turn.
+//	turn 2  ann   ← handed back; resume_after = bo
+//	turn 3  cass  ← after bo, not after ann
+//	turn 4  ann   ← normal rotation from here on
+//
+// ann and bo have simply swapped places for one cycle. Without resume_after,
+// turn 3 would go to bo — who has just done two in a row.
+//
+// Returns the next assignee, and the resume point to carry on that occurrence
+// (nil when the rotation is running normally).
+func nextTurn(rotation []string, completed *models.Occurrence, doerID string) (assignee string, resumeAfter *string) {
+	if doerID != completed.AssignedTo {
+		// A cover. The debt goes back to whoever it was assigned to, and the
+		// rotation will pick up after whoever actually did it.
+		doer := doerID
+		return completed.AssignedTo, &doer
+	}
+
+	// Completed by its own assignee. If this was a debt being repaid, the
+	// rotation resumes after the person who covered — not after the repayer,
+	// who would otherwise hand the next turn straight back to their coverer.
+	from := completed.AssignedTo
+	if completed.ResumeAfter != nil {
+		from = *completed.ResumeAfter
+	}
+	return nextInRotation(rotation, from), nil
 }
 
 // nextInRotation returns whoever's turn follows the current holder's.
@@ -815,7 +849,7 @@ func scanChore(s scanner, c *models.Chore) error {
 func scanOccurrence(s scanner, o *models.Occurrence) error {
 	return s.Scan(
 		&o.ID, &o.ChoreID, &o.GroupID, &o.AssignedTo, &o.Status,
-		&o.DueDate, &o.DoneBy, &o.DoneAt, &o.CreatedAt, &o.SpawnedFrom,
+		&o.DueDate, &o.DoneBy, &o.DoneAt, &o.CreatedAt, &o.SpawnedFrom, &o.ResumeAfter,
 		&o.ChoreName, &o.DoneLine,
 	)
 }
@@ -924,9 +958,10 @@ func replaceRotation(tx *sql.Tx, choreID string, rotation []string) error {
 
 func insertOccurrence(tx *sql.Tx, o models.Occurrence) error {
 	_, err := tx.Exec(
-		`INSERT INTO occurrences (id, chore_id, group_id, assigned_to, status, due_date, spawned_from, created_at)
-		 VALUES (?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`,
-		o.ID, o.ChoreID, o.GroupID, o.AssignedTo, o.Status, o.DueDate, o.SpawnedFrom,
+		`INSERT INTO occurrences (id, chore_id, group_id, assigned_to, status, due_date,
+			spawned_from, resume_after, created_at)
+		 VALUES (?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`,
+		o.ID, o.ChoreID, o.GroupID, o.AssignedTo, o.Status, o.DueDate, o.SpawnedFrom, o.ResumeAfter,
 	)
 	return err
 }

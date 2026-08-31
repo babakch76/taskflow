@@ -171,6 +171,17 @@ func migrate(db *sql.DB) error {
 		-- Matching on "the newest open occurrence of this chore" would guess;
 		-- this records it.
 		spawned_from TEXT REFERENCES occurrences(id) ON DELETE SET NULL,
+		-- Where the rotation picks up again once this occurrence is completed
+		-- by the person it is assigned to.
+		--
+		-- Normally NULL, and the turn simply moves to whoever follows the
+		-- assignee. It is set only on a *debt* occurrence — one handed back to
+		-- someone because a cover was done on their behalf — and it holds the
+		-- coverer, because the cover counted as the coverer's turn and the
+		-- rotation must resume after *them*, not after the person repaying.
+		-- Without it the repayment would look like an ordinary turn and the
+		-- coverer would be asked to go again immediately.
+		resume_after TEXT REFERENCES users(id),
 
 		-- done_by and done_at travel together: either both set (a completion) or
 		-- both NULL (still open, or an undone completion). Neither half alone
@@ -237,6 +248,7 @@ func addMissingColumns(db *sql.DB) error {
 		// Added while F2 was in progress, so a database created from the first
 		// chore commit picks it up rather than needing to be thrown away.
 		{table: "occurrences", name: "spawned_from", ddl: `ALTER TABLE occurrences ADD COLUMN spawned_from TEXT REFERENCES occurrences(id)`},
+		{table: "occurrences", name: "resume_after", ddl: `ALTER TABLE occurrences ADD COLUMN resume_after TEXT REFERENCES users(id)`},
 	}
 
 	for _, c := range columns {

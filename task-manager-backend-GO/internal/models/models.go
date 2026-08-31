@@ -137,6 +137,14 @@ type Occurrence struct {
 	// SpawnedFrom is the occurrence whose completion created this one. Undoing
 	// that completion removes this occurrence again.
 	SpawnedFrom *string `json:"spawned_from,omitempty"`
+	// ResumeAfter is set only on a debt occurrence — one handed back because
+	// somebody else did the last turn on the assignee's behalf. It holds the
+	// coverer, after whom the rotation continues once this one is repaid.
+	//
+	// Its presence is what makes a row "yours because someone covered for you",
+	// which is a fact the board could show but deliberately does not: the debt
+	// is a scheduling rule, not something to caption on a person's row.
+	ResumeAfter *string `json:"resume_after,omitempty"`
 
 	// ChoreName and DoneLine are joined in so the board can render a row
 	// without a second round trip per occurrence.

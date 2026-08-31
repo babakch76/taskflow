@@ -730,6 +730,246 @@ func TestMissedIntervalDoesNotRollForward(t *testing.T) {
 	}
 }
 
+// --- the unified turn rule --------------------------------------------------
+
+// The spec's rule, played out over four turns.
+//
+// rotation [ann, bo, cass], ann's turn, bo does it:
+//
+//	turn 1  ann   → bo completes it; that counted as bo's turn
+//	turn 2  ann   ← handed back, because ann still owes one
+//	turn 3  cass  ← after bo, not after ann
+//	turn 4  ann   ← normal rotation resumes
+//
+// Net effect: ann and bo swapped places for one cycle. The failure this guards
+// against is turn 3 going to bo, who would then have done two in a row while
+// ann's cover cost her nothing.
+func TestCoverCountsAsTheDoersTurnAndHandsTheChoreBack(t *testing.T) {
+	db := newTestDB(t)
+	ann := newUser(t, db, "ann")
+	bo := newUser(t, db, "bo")
+	cass := newUser(t, db, "cass")
+	groupID := newGroup(t, db, ann, "Flat")
+	addMember(t, db, groupID, bo, "member")
+	addMember(t, db, groupID, cass, "member")
+
+	names := map[string]string{ann: "ann", bo: "bo", cass: "cass"}
+
+	chore := createChore(t, db, groupID, ann, fmt.Sprintf(`{
+		"name": "Kitchen", "schedule_type": "as_needed",
+		"rotation": [%q, %q, %q]
+	}`, ann, bo, cass))
+
+	only := func() models.Occurrence {
+		t.Helper()
+		open := openOccurrencesFor(t, db, groupID, ann, chore.ID)
+		if len(open) != 1 {
+			t.Fatalf("expected exactly one open occurrence, got %d", len(open))
+		}
+		return open[0]
+	}
+
+	turn1 := only()
+	if turn1.AssignedTo != ann {
+		t.Fatalf("turn 1 should be ann's, got %s", names[turn1.AssignedTo])
+	}
+
+	// bo covers for ann.
+	if rec := patchOccurrence(t, db, groupID, turn1.ID, bo, "done"); rec.Code != 200 {
+		t.Fatalf("bo's cover: got %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	turn2 := only()
+	if turn2.AssignedTo != ann {
+		t.Fatalf("turn 2 went to %s; a cover must hand the chore back to ann, who still owes one",
+			names[turn2.AssignedTo])
+	}
+	if turn2.ResumeAfter == nil || *turn2.ResumeAfter != bo {
+		t.Fatalf("turn 2 should resume after bo, got %v", turn2.ResumeAfter)
+	}
+
+	// ann repays it herself.
+	if rec := patchOccurrence(t, db, groupID, turn2.ID, ann, "done"); rec.Code != 200 {
+		t.Fatalf("ann repaying: got %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	turn3 := only()
+	if turn3.AssignedTo != cass {
+		t.Fatalf("turn 3 went to %s, want cass — the rotation resumes after the coverer, not after ann",
+			names[turn3.AssignedTo])
+	}
+	if turn3.ResumeAfter != nil {
+		t.Errorf("turn 3 is an ordinary turn and should carry no resume point, got %v", turn3.ResumeAfter)
+	}
+
+	// And from here the rotation is back to normal.
+	patchOccurrence(t, db, groupID, turn3.ID, cass, "done")
+	turn4 := only()
+	if turn4.AssignedTo != ann {
+		t.Errorf("turn 4 went to %s, want ann", names[turn4.AssignedTo])
+	}
+}
+
+// "Nobody's patience can be waited out." However many times other people give
+// in and do it, the chore keeps coming back to the person whose turn it is —
+// their name only clears by doing one themselves.
+func TestWaitingItOutDoesNotMoveTheTurnOn(t *testing.T) {
+	db := newTestDB(t)
+	ann := newUser(t, db, "ann")
+	bo := newUser(t, db, "bo")
+	cass := newUser(t, db, "cass")
+	groupID := newGroup(t, db, ann, "Flat")
+	addMember(t, db, groupID, bo, "member")
+	addMember(t, db, groupID, cass, "member")
+
+	chore := createChore(t, db, groupID, ann, fmt.Sprintf(`{
+		"name": "Bin", "schedule_type": "as_needed", "rotation": [%q, %q, %q]
+	}`, ann, bo, cass))
+
+	// Three cycles in which ann never lifts a finger.
+	for i, coverer := range []string{bo, cass, bo} {
+		open := openOccurrencesFor(t, db, groupID, ann, chore.ID)
+		if len(open) != 1 {
+			t.Fatalf("cycle %d: expected one open occurrence, got %d", i, len(open))
+		}
+		if open[0].AssignedTo != ann {
+			t.Fatalf("cycle %d: the chore drifted off ann onto %s", i, open[0].AssignedTo)
+		}
+		patchOccurrence(t, db, groupID, open[0].ID, coverer, "done")
+	}
+
+	final := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	if final.AssignedTo != ann {
+		t.Errorf("after three covers the chore sits with %s; it must still be ann's", final.AssignedTo)
+	}
+}
+
+// Completing your own turn is the ordinary case and must not set a debt.
+func TestCompletingYourOwnTurnLeavesNoDebt(t *testing.T) {
+	db := newTestDB(t)
+	ann := newUser(t, db, "ann")
+	bo := newUser(t, db, "bo")
+	groupID := newGroup(t, db, ann, "Flat")
+	addMember(t, db, groupID, bo, "member")
+
+	chore := createChore(t, db, groupID, ann, fmt.Sprintf(`{
+		"name": "Hallway", "schedule_type": "as_needed", "rotation": [%q, %q]
+	}`, ann, bo))
+
+	first := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	patchOccurrence(t, db, groupID, first.ID, ann, "done")
+
+	next := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	if next.AssignedTo != bo {
+		t.Errorf("turn went to %s, want bo", next.AssignedTo)
+	}
+	if next.ResumeAfter != nil {
+		t.Errorf("an ordinary completion must not create a debt, got resume_after=%v", next.ResumeAfter)
+	}
+}
+
+// Undoing a cover has to put things back exactly: the debt occurrence goes
+// away, and the original returns to its holder still open.
+func TestUndoingACoverRemovesTheDebt(t *testing.T) {
+	db := newTestDB(t)
+	ann := newUser(t, db, "ann")
+	bo := newUser(t, db, "bo")
+	groupID := newGroup(t, db, ann, "Flat")
+	addMember(t, db, groupID, bo, "member")
+
+	chore := createChore(t, db, groupID, ann, fmt.Sprintf(`{
+		"name": "Kitchen", "schedule_type": "as_needed", "rotation": [%q, %q]
+	}`, ann, bo))
+
+	first := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	patchOccurrence(t, db, groupID, first.ID, bo, "done")
+
+	// bo changes his mind inside the window.
+	if rec := patchOccurrence(t, db, groupID, first.ID, bo, "open"); rec.Code != 200 {
+		t.Fatalf("undo: got %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	open := openOccurrencesFor(t, db, groupID, ann, chore.ID)
+	if len(open) != 1 {
+		t.Fatalf("expected one open occurrence after the undo, got %d", len(open))
+	}
+	if open[0].ID != first.ID || open[0].AssignedTo != ann {
+		t.Errorf("undo did not restore the original turn: id=%s assignee=%s", open[0].ID, open[0].AssignedTo)
+	}
+	if open[0].ResumeAfter != nil {
+		t.Errorf("the restored occurrence should carry no debt, got %v", open[0].ResumeAfter)
+	}
+}
+
+// nextTurn in isolation, including the case the worked example exists to pin.
+func TestNextTurn(t *testing.T) {
+	rotation := []string{"ann", "bo", "cass"}
+	resume := func(s string) *string { return &s }
+
+	cases := []struct {
+		name           string
+		assignedTo     string
+		resumeAfter    *string
+		doer           string
+		wantAssignee   string
+		wantResumeAfte *string
+	}{
+		{
+			name:         "own turn advances normally",
+			assignedTo:   "ann",
+			doer:         "ann",
+			wantAssignee: "bo",
+		},
+		{
+			name:           "a cover hands it back and remembers the coverer",
+			assignedTo:     "ann",
+			doer:           "bo",
+			wantAssignee:   "ann",
+			wantResumeAfte: resume("bo"),
+		},
+		{
+			name:         "repaying a debt resumes after the coverer",
+			assignedTo:   "ann",
+			resumeAfter:  resume("bo"),
+			doer:         "ann",
+			wantAssignee: "cass",
+		},
+		{
+			name:           "a debt covered again stays with the same person",
+			assignedTo:     "ann",
+			resumeAfter:    resume("bo"),
+			doer:           "cass",
+			wantAssignee:   "ann",
+			wantResumeAfte: resume("cass"),
+		},
+		{
+			name:         "the last in the rotation wraps to the first",
+			assignedTo:   "cass",
+			doer:         "cass",
+			wantAssignee: "ann",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			completed := &models.Occurrence{AssignedTo: tc.assignedTo, ResumeAfter: tc.resumeAfter}
+			gotAssignee, gotResume := nextTurn(rotation, completed, tc.doer)
+
+			if gotAssignee != tc.wantAssignee {
+				t.Errorf("assignee: got %s, want %s", gotAssignee, tc.wantAssignee)
+			}
+			switch {
+			case tc.wantResumeAfte == nil && gotResume != nil:
+				t.Errorf("resume_after: got %s, want none", *gotResume)
+			case tc.wantResumeAfte != nil && gotResume == nil:
+				t.Errorf("resume_after: got none, want %s", *tc.wantResumeAfte)
+			case tc.wantResumeAfte != nil && *gotResume != *tc.wantResumeAfte:
+				t.Errorf("resume_after: got %s, want %s", *gotResume, *tc.wantResumeAfte)
+			}
+		})
+	}
+}
+
 func TestNextInRotation(t *testing.T) {
 	rotation := []string{"a", "b", "c"}
 	cases := []struct{ current, want string }{
