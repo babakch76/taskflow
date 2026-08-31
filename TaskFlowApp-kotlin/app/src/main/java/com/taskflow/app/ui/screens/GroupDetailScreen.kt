@@ -291,10 +291,6 @@ fun GroupDetailScreen(
                         3 -> MemberList(
                             members = state.members,
                             myUserId = myUserId,
-                            amOwner = state.group?.myRole == ROLE_OWNER,
-                            onSetRole = { member, role ->
-                                viewModel.setMemberRole(member.id, role, member.username)
-                            },
                         )
                     }
                     }
@@ -309,7 +305,6 @@ fun GroupDetailScreen(
         TaskDetailSheet(
             task = task,
             members = state.members,
-            canEditDeadline = canManageDeadlines(state.group?.myRole),
             onDismiss = { detailTaskId = null },
             onSaveText = { title, description ->
                 viewModel.updateTaskText(task.id, title, description)
@@ -705,7 +700,6 @@ private fun TaskCard(
 private fun TaskDetailSheet(
     task: Task,
     members: List<MemberInfo>,
-    canEditDeadline: Boolean,
     onDismiss: () -> Unit,
     onSaveText: (title: String?, description: String?) -> Unit,
     onSetStatus: (String) -> Unit,
@@ -830,33 +824,21 @@ private fun TaskDetailSheet(
                         },
                     )
                 }
-                if (canEditDeadline) {
-                    Row {
-                        if (task.dueDate != null) {
-                            IconButton(onClick = { onSetDueDate(null) }) {
-                                Icon(Icons.Default.Close, contentDescription = "Remove deadline")
-                            }
+                Row {
+                    if (task.dueDate != null) {
+                        IconButton(onClick = { onSetDueDate(null) }) {
+                            Icon(Icons.Default.Close, contentDescription = "Remove deadline")
                         }
-                        IconButton(onClick = { showDatePicker = true }) {
-                            Icon(
-                                Icons.Default.CalendarMonth,
-                                contentDescription = if (task.dueDate == null) "Set deadline"
-                                else "Change deadline",
-                            )
-                        }
+                    }
+                    IconButton(onClick = { showDatePicker = true }) {
+                        Icon(
+                            Icons.Default.CalendarMonth,
+                            contentDescription = if (task.dueDate == null) "Set deadline"
+                            else "Change deadline",
+                        )
                     }
                 }
             }
-            if (!canEditDeadline) {
-                // Say why the controls aren't there, rather than leaving a
-                // read-only field that looks broken.
-                Text(
-                    text = "Only the group owner or a manager can change deadlines.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
             HorizontalDivider()
 
             // updated_at is null for rows written before that column existed,
@@ -1298,18 +1280,13 @@ private fun eventColor(type: String) = when (type) {
 // ═══════════════════════════════════════════════════════════════
 
 /**
- * Group roster, with promote/demote for the owner.
- *
- * Only the owner sees the role controls, and never on their own row — the
- * backend refuses both cases anyway, so showing the buttons would just be
- * offering an action that always fails.
+ * Group roster. Read-only: there are no role controls, because there is
+ * nothing a role grants any more — every member can edit every chore.
  */
 @Composable
 private fun MemberList(
     members: List<MemberInfo>,
     myUserId: String?,
-    amOwner: Boolean,
-    onSetRole: (MemberInfo, String) -> Unit,
 ) {
     LazyColumn(
         contentPadding = PaddingValues(
@@ -1323,7 +1300,6 @@ private fun MemberList(
     ) {
         items(members, key = { it.id }) { member ->
             val isMe = member.id == myUserId
-            val canChangeThisRole = amOwner && !isMe && member.role != ROLE_OWNER
 
             ElevatedCard(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(14.dp)) {
@@ -1357,34 +1333,7 @@ private fun MemberList(
                         }
                         RoleChip(member.role)
                     }
-
-                    if (canChangeThisRole) {
-                        Spacer(Modifier.height(8.dp))
-                        if (member.role == ROLE_ADMIN) {
-                            OutlinedButton(
-                                onClick = { onSetRole(member, ROLE_MEMBER) },
-                                modifier = Modifier.fillMaxWidth(),
-                            ) { Text("Remove manager role") }
-                        } else {
-                            FilledTonalButton(
-                                onClick = { onSetRole(member, ROLE_ADMIN) },
-                                modifier = Modifier.fillMaxWidth(),
-                            ) { Text("Make manager") }
-                        }
-                    }
                 }
-            }
-        }
-
-        if (amOwner) {
-            item(key = "role-note") {
-                Text(
-                    text = "Managers can set and remove task deadlines. Only you can " +
-                        "change who is a manager.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
             }
         }
     }
@@ -1393,10 +1342,8 @@ private fun MemberList(
 /**
  * Human label for a role.
  *
- * The backend stores "admin" — a value fixed by a CHECK constraint that SQLite
- * cannot alter in place — but users are shown "Manager" everywhere, matching
- * the "Make manager" action. Showing the raw value left the chip saying "Admin"
- * next to a button offering to make someone a manager.
+ * "Manager" is kept only for groups that still hold an `admin` row from before
+ * the role was removed — nothing assigns it any more.
  */
 private fun roleLabel(role: String): String = when (role) {
     ROLE_OWNER -> "Owner"

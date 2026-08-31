@@ -77,18 +77,6 @@ func (h *TaskHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.DueDate != nil {
-		// Setting a deadline is owner/manager only, even at creation — the
-		// task itself can be created by anyone.
-		role, err := h.DB.GetMemberRole(groupID, userID)
-		if err != nil {
-			jsonError(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		if !canManageDeadlines(role) {
-			jsonError(w, deadlinePermissionError, http.StatusForbidden)
-			return
-		}
-
 		t, err := time.Parse(time.RFC3339, *req.DueDate)
 		if err != nil {
 			jsonError(w, "due_date must be RFC3339 format", http.StatusBadRequest)
@@ -196,24 +184,6 @@ func (h *TaskHandler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	var parsedDueDate *time.Time
 	clearDueDate := false
 	if req.DueDate.Present {
-		// Both setting and clearing are restricted. Note this hangs off
-		// Present, not off the value — so a plain member editing only a title
-		// is unaffected, because Patchable.Absent keeps due_date out of the
-		// JSON entirely and Present stays false.
-		//
-		// 403 rather than the 404 used for non-members: the caller is a member,
-		// already knows this group exists, and needs to understand that the
-		// refusal is about permission, not a missing task.
-		role, err := h.DB.GetMemberRole(groupID, userID)
-		if err != nil {
-			jsonError(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		if !canManageDeadlines(role) {
-			jsonError(w, deadlinePermissionError, http.StatusForbidden)
-			return
-		}
-
 		if req.DueDate.IsNull {
 			clearDueDate = true
 		} else {

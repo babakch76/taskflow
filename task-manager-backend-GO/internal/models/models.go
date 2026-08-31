@@ -163,13 +163,3 @@ type GroupWithProgress struct {
 	// the member list and work out which row is itself.
 	MyRole string `json:"my_role"`
 }
-
-// UpdateMemberRoleRequest is the body of
-// PATCH /groups/{group_id}/members/{user_id}/role.
-//
-// Only "admin" and "member" are accepted. "owner" is deliberately not a
-// settable value — there is exactly one owner, set at creation, and
-// transferring that is out of scope.
-type UpdateMemberRoleRequest struct {
-	Role string `json:"role"`
-}

@@ -14,13 +14,15 @@ import (
 // Event types written to activity_events. Clients switch on these strings, so
 // treat them as part of the API contract.
 const (
-	EventTaskCreated       = "task_created"
-	EventTaskUpdated       = "task_updated"
-	EventTaskDeleted       = "task_deleted"
-	EventTasksBulkUpdated  = "tasks_bulk_updated"
-	EventMemberJoined      = "member_joined"
-	EventMemberLeft        = "member_left"
-	EventInviteAccepted    = "invite_accepted"
+	EventTaskCreated      = "task_created"
+	EventTaskUpdated      = "task_updated"
+	EventTaskDeleted      = "task_deleted"
+	EventTasksBulkUpdated = "tasks_bulk_updated"
+	EventMemberJoined     = "member_joined"
+	EventMemberLeft       = "member_left"
+	EventInviteAccepted   = "invite_accepted"
+	// No longer emitted — the manager role was removed. Kept because rows
+	// written before that still carry this value.
 	EventMemberRoleChanged = "member_role_changed"
 )
 

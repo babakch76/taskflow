@@ -11,7 +11,6 @@ import com.taskflow.app.data.model.InviteByUsernameRequest
 import com.taskflow.app.data.model.MemberInfo
 import com.taskflow.app.data.model.Patchable
 import com.taskflow.app.data.model.Task
-import com.taskflow.app.data.model.UpdateMemberRoleRequest
 import com.taskflow.app.data.model.UpdateTaskRequest
 import com.taskflow.app.data.remote.ApiErrors
 import com.taskflow.app.data.remote.RetrofitClient
@@ -26,17 +25,14 @@ import java.time.format.DateTimeFormatter
 /**
  * Membership roles, matching the backend's `group_members.role`.
  *
- * [ROLE_ADMIN] is shown to users as "Manager"; the wire value stays "admin"
- * because the backend's CHECK constraint fixes the vocabulary and SQLite
- * cannot alter one in place.
+ * [ROLE_ADMIN] is no longer assignable. The manager role and the deadline
+ * permission it carried were removed when the chore spec made editing
+ * explicitly open to every member; the constant remains only so that groups
+ * created before that still render their existing rows correctly.
  */
 const val ROLE_OWNER = "owner"
 const val ROLE_ADMIN = "admin"
 const val ROLE_MEMBER = "member"
-
-/** True if this role may set or clear task deadlines. */
-fun canManageDeadlines(role: String?): Boolean =
-    role == ROLE_OWNER || role == ROLE_ADMIN
 
 /** Everything the Group Detail screen renders. */
 data class GroupDetailUiState(
@@ -247,49 +243,6 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
         runAction(successMessage = note) {
             api.updateTask(groupId, taskId, UpdateTaskRequest(dueDate = due))
         }
-    }
-
-    /**
-     * Promote a member to manager, or demote them back.
-     *
-     * Owner only. Reloads members afterwards rather than patching locally, so
-     * the list reflects what the server actually did.
-     */
-    fun setMemberRole(userId: String, role: String, username: String) {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isWorking = true, message = null)
-            try {
-                val response = api.updateMemberRole(groupId, userId, UpdateMemberRoleRequest(role))
-                if (response.isSuccessful) {
-                    refreshMembersAndRole()
-                    reloadActivityFromScratch()
-                    val note = if (role == ROLE_ADMIN) {
-                        "$username is now a manager"
-                    } else {
-                        "$username is now a member"
-                    }
-                    _uiState.value = _uiState.value.copy(isWorking = false, message = note)
-                } else {
-                    _uiState.value = _uiState.value.copy(
-                        isWorking = false,
-                        message = ApiErrors.messageFor(response),
-                    )
-                }
-            } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(isWorking = false, message = networkMessage(e))
-            }
-        }
-    }
-
-    private suspend fun refreshMembersAndRole() {
-        runCatching { api.listMembers(groupId) }.getOrNull()
-            ?.takeIf { it.isSuccessful }?.body()
-            ?.let { _uiState.value = _uiState.value.copy(members = it) }
-        // The group payload carries my_role, which the caller's own promotion
-        // or demotion would have changed.
-        runCatching { api.getGroup(groupId) }.getOrNull()
-            ?.takeIf { it.isSuccessful }?.body()
-            ?.let { _uiState.value = _uiState.value.copy(group = it) }
     }
 
     /** Multi-select: one status for many tasks, in a single backend transaction. */

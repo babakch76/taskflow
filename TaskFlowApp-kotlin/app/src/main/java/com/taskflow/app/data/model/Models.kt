@@ -204,16 +204,6 @@ data class BulkUpdateTaskStatusRequest(
     val status: String,   // "todo", "in_progress", "done"
 )
 
-/**
- * Body of PATCH /groups/{group_id}/members/{user_id}/role — owner only.
- *
- * Only "admin" and "member" are accepted; "owner" is not settable, since
- * ownership transfer is out of scope.
- */
-data class UpdateMemberRoleRequest(
-    val role: String,
-)
-
 data class InviteByUsernameRequest(
     val username: String,
 )

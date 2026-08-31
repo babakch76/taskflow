@@ -666,214 +666,54 @@ func TestTaskLifecycleRecordsActivityAndUpdatedAt(t *testing.T) {
 	}
 }
 
-// --- Deadlines are owner/manager only ---------------------------------------
+// --- Anyone may set a deadline -----------------------------------------------
 
-// A plain member may do everything else to a task but must not set or clear
-// its deadline. Crucially, editing other fields must still work — the check
-// hangs off whether due_date is present in the patch, not off the request.
-func TestDueDatePermissions(t *testing.T) {
+// Deadlines were briefly owner/manager-only. The chore spec makes chore
+// editing explicitly open to every member, so the gate is gone; this pins that
+// a plain member can both set and clear one.
+func TestAnyMemberCanManageDueDates(t *testing.T) {
 	db := newTestDB(t)
 	th := &TaskHandler{DB: db}
 
 	owner := newUser(t, db, "owner")
-	manager := newUser(t, db, "manager")
 	plain := newUser(t, db, "plain")
-	groupID := newGroup(t, db, owner, "Study Group")
-	addMember(t, db, groupID, manager, RoleAdmin)
+	groupID := newGroup(t, db, owner, "Household")
 	addMember(t, db, groupID, plain, RoleMember)
+	taskID := newTask(t, db, groupID, "Take the bins out")
 
-	taskID := newTask(t, db, groupID, "Write report")
-	due := `"2026-12-01T09:00:00Z"`
-
-	patch := func(actor, body string) *httptest.ResponseRecorder {
+	patch := func(body string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
 		th.UpdateTask(rec, request(
-			http.MethodPatch, "/groups/x/tasks/y", body, actor,
+			http.MethodPatch, "/groups/x/tasks/y", body, plain,
 			map[string]string{"group_id": groupID, "task_id": taskID},
 		))
 		return rec
 	}
 
-	t.Run("owner can set a due date", func(t *testing.T) {
-		if rec := patch(owner, `{"due_date":`+due+`}`); rec.Code != http.StatusOK {
-			t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
-		}
-	})
-
-	t.Run("manager can set a due date", func(t *testing.T) {
-		if rec := patch(manager, `{"due_date":`+due+`}`); rec.Code != http.StatusOK {
-			t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
-		}
-	})
-
-	t.Run("member cannot set a due date", func(t *testing.T) {
-		rec := patch(plain, `{"due_date":`+due+`}`)
-		if rec.Code != http.StatusForbidden {
-			t.Fatalf("got %d, want 403: %s", rec.Code, rec.Body.String())
-		}
-		if msg := decodeError(t, rec); msg == "" {
-			t.Fatal("403 carried no explanation")
-		}
-	})
-
-	t.Run("member cannot clear a due date", func(t *testing.T) {
-		if rec := patch(plain, `{"due_date":null}`); rec.Code != http.StatusForbidden {
-			t.Fatalf("got %d, want 403: %s", rec.Code, rec.Body.String())
-		}
-		// And the deadline the owner set must still be there.
-		var dueDate sql.NullString
-		if err := db.QueryRow(`SELECT due_date FROM tasks WHERE id = ?`, taskID).Scan(&dueDate); err != nil {
-			t.Fatalf("read due_date: %v", err)
-		}
-		if !dueDate.Valid {
-			t.Fatal("member's refused request cleared the due date anyway")
-		}
-	})
-
-	t.Run("member can still edit everything else", func(t *testing.T) {
-		rec := patch(plain, `{"title":"Renamed by a member","status":"done"}`)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("got %d, want 200: %s", rec.Code, rec.Body.String())
-		}
-	})
-
-	t.Run("owner can clear a due date", func(t *testing.T) {
-		if rec := patch(owner, `{"due_date":null}`); rec.Code != http.StatusOK {
-			t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
-		}
-		var dueDate sql.NullString
-		if err := db.QueryRow(`SELECT due_date FROM tasks WHERE id = ?`, taskID).Scan(&dueDate); err != nil {
-			t.Fatalf("read due_date: %v", err)
-		}
-		if dueDate.Valid {
-			t.Fatal("owner's clear did not take effect")
-		}
-	})
-
-	t.Run("member cannot set a due date at creation", func(t *testing.T) {
-		rec := httptest.NewRecorder()
-		th.CreateTask(rec, request(
-			http.MethodPost, "/groups/x/tasks",
-			`{"title":"Sneaky","due_date":`+due+`}`, plain,
-			map[string]string{"group_id": groupID},
-		))
-		if rec.Code != http.StatusForbidden {
-			t.Fatalf("got %d, want 403: %s", rec.Code, rec.Body.String())
-		}
-	})
-
-	t.Run("member can create a task without a due date", func(t *testing.T) {
-		rec := httptest.NewRecorder()
-		th.CreateTask(rec, request(
-			http.MethodPost, "/groups/x/tasks", `{"title":"Fine"}`, plain,
-			map[string]string{"group_id": groupID},
-		))
-		if rec.Code != http.StatusCreated {
-			t.Fatalf("got %d, want 201: %s", rec.Code, rec.Body.String())
-		}
-	})
-}
-
-// --- Role management is owner-only ------------------------------------------
-
-func TestUpdateMemberRole(t *testing.T) {
-	db := newTestDB(t)
-	h := &GroupHandler{DB: db}
-
-	owner := newUser(t, db, "owner")
-	member := newUser(t, db, "member")
-	other := newUser(t, db, "other")
-	outsider := newUser(t, db, "outsider")
-	groupID := newGroup(t, db, owner, "Study Group")
-	addMember(t, db, groupID, member, RoleMember)
-	addMember(t, db, groupID, other, RoleMember)
-
-	call := func(actor, target, body string) *httptest.ResponseRecorder {
-		rec := httptest.NewRecorder()
-		h.UpdateMemberRole(rec, request(
-			http.MethodPatch, "/groups/x/members/y/role", body, actor,
-			map[string]string{"group_id": groupID, "user_id": target},
-		))
-		return rec
+	if rec := patch(`{"due_date":"2026-12-01T09:00:00Z"}`); rec.Code != http.StatusOK {
+		t.Fatalf("member setting a due date: got %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if rec := patch(`{"due_date":null}`); rec.Code != http.StatusOK {
+		t.Fatalf("member clearing a due date: got %d, want 200: %s", rec.Code, rec.Body.String())
 	}
 
-	roleOf := func(userID string) string {
-		role, err := db.GetMemberRole(groupID, userID)
-		if err != nil {
-			t.Fatalf("GetMemberRole: %v", err)
-		}
-		return role
+	var dueDate sql.NullString
+	if err := db.QueryRow(`SELECT due_date FROM tasks WHERE id = ?`, taskID).Scan(&dueDate); err != nil {
+		t.Fatalf("read due_date: %v", err)
+	}
+	if dueDate.Valid {
+		t.Fatal("clear did not take effect")
 	}
 
-	t.Run("owner promotes a member to manager", func(t *testing.T) {
-		if rec := call(owner, member, `{"role":"admin"}`); rec.Code != http.StatusOK {
-			t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
-		}
-		if got := roleOf(member); got != RoleAdmin {
-			t.Fatalf("role = %q, want admin", got)
-		}
-	})
-
-	t.Run("owner demotes them again", func(t *testing.T) {
-		if rec := call(owner, member, `{"role":"member"}`); rec.Code != http.StatusOK {
-			t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
-		}
-		if got := roleOf(member); got != RoleMember {
-			t.Fatalf("role = %q, want member", got)
-		}
-	})
-
-	t.Run("a manager cannot promote anyone", func(t *testing.T) {
-		if rec := call(owner, member, `{"role":"admin"}`); rec.Code != http.StatusOK {
-			t.Fatalf("setup promote failed: %d", rec.Code)
-		}
-		if rec := call(member, other, `{"role":"admin"}`); rec.Code != http.StatusForbidden {
-			t.Fatalf("got %d, want 403: %s", rec.Code, rec.Body.String())
-		}
-		if got := roleOf(other); got != RoleMember {
-			t.Fatalf("other's role changed to %q", got)
-		}
-	})
-
-	t.Run("a plain member cannot promote anyone", func(t *testing.T) {
-		if rec := call(other, other, `{"role":"admin"}`); rec.Code != http.StatusForbidden {
-			t.Fatalf("got %d, want 403", rec.Code)
-		}
-	})
-
-	t.Run("owner cannot change their own role", func(t *testing.T) {
-		if rec := call(owner, owner, `{"role":"member"}`); rec.Code != http.StatusForbidden {
-			t.Fatalf("got %d, want 403: %s", rec.Code, rec.Body.String())
-		}
-		if got := roleOf(owner); got != RoleOwner {
-			t.Fatalf("owner demoted themselves to %q", got)
-		}
-	})
-
-	t.Run("owner cannot be promoted to owner", func(t *testing.T) {
-		if rec := call(owner, member, `{"role":"owner"}`); rec.Code != http.StatusBadRequest {
-			t.Fatalf("got %d, want 400: %s", rec.Code, rec.Body.String())
-		}
-	})
-
-	t.Run("target must be a member", func(t *testing.T) {
-		if rec := call(owner, outsider, `{"role":"admin"}`); rec.Code != http.StatusNotFound {
-			t.Fatalf("got %d, want 404: %s", rec.Code, rec.Body.String())
-		}
-	})
-
-	t.Run("role change is recorded in the activity feed", func(t *testing.T) {
-		var count int
-		if err := db.QueryRow(
-			`SELECT COUNT(*) FROM activity_events WHERE group_id = ? AND event_type = ?`,
-			groupID, EventMemberRoleChanged,
-		).Scan(&count); err != nil {
-			t.Fatalf("count events: %v", err)
-		}
-		if count == 0 {
-			t.Fatal("no member_role_changed events recorded")
-		}
-	})
+	rec := httptest.NewRecorder()
+	th.CreateTask(rec, request(
+		http.MethodPost, "/groups/x/tasks",
+		`{"title":"Buy milk","due_date":"2026-12-01T09:00:00Z"}`, plain,
+		map[string]string{"group_id": groupID},
+	))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("member creating with a due date: got %d, want 201: %s", rec.Code, rec.Body.String())
+	}
 }
 
 // GET /groups/{id} tells the caller their own role, so a client can gate its
