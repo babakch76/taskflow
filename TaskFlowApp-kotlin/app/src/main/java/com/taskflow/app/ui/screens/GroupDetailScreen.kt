@@ -39,6 +39,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import com.taskflow.app.TaskFlowApp
 import com.taskflow.app.data.model.ActivityEvent
 import com.taskflow.app.data.model.MemberInfo
@@ -1509,7 +1511,9 @@ private fun CreateChoreDialog(
     var name by remember { mutableStateOf("") }
     var doneLine by remember { mutableStateOf("") }
     var scheduleType by remember { mutableStateOf(ScheduleType.INTERVAL) }
-    var intervalDays by remember { mutableIntStateOf(7) }
+    // Held as text, not an Int: the field has to be allowed to be empty while
+    // someone clears it to type a new number, and an Int has no way to say so.
+    var intervalText by remember { mutableStateOf("7") }
     var weekday by remember { mutableIntStateOf(2) } // Tuesday
     // Order matters: this is the turn order, not a set.
     val rotation = remember { mutableStateListOf<String>() }
@@ -1523,6 +1527,16 @@ private fun CreateChoreDialog(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.verticalScroll(rememberScrollState()),
             ) {
+                // At the top, not the bottom: this form is taller than the
+                // dialog, and an error under the fold is not feedback — the
+                // button just appears to do nothing.
+                AnimatedVisibility(visible = error != null) {
+                    Text(
+                        text = error ?: "",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it; error = null },
@@ -1561,28 +1575,50 @@ private fun CreateChoreDialog(
 
                 when (scheduleType) {
                     ScheduleType.INTERVAL -> {
-                        // The spec's set exactly: 1-6 days, weekly, monthly.
+                        // Any whole number of days, typed or stepped. The
+                        // presets below are shortcuts, not the whole choice —
+                        // a fortnightly bin collection has no chip.
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text("Every", style = MaterialTheme.typography.bodyMedium)
+                            OutlinedTextField(
+                                value = intervalText,
+                                onValueChange = { typed ->
+                                    // Digits only, and short enough that the
+                                    // field can't hold a number the backend
+                                    // will reject on length alone.
+                                    val digits = typed.filter { it.isDigit() }.take(3)
+                                    intervalText = digits
+                                    error = null
+                                },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.width(96.dp),
+                            )
+                            Text(
+                                if (intervalText.toIntOrNull() == 1) "day" else "days",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+
                         FlowRow(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
-                            listOf(1, 2, 3, 4, 5, 6, 7, 30).forEach { days ->
+                            listOf(
+                                1 to "Daily", 7 to "Weekly",
+                                14 to "Fortnightly", 30 to "Monthly",
+                            ).forEach { (days, label) ->
                                 FilterChip(
-                                    selected = intervalDays == days,
-                                    onClick = { intervalDays = days },
-                                    label = {
-                                        Text(
-                                            when (days) {
-                                                1 -> "Daily"
-                                                7 -> "Weekly"
-                                                30 -> "Monthly"
-                                                else -> "$days days"
-                                            },
-                                        )
-                                    },
+                                    selected = intervalText.toIntOrNull() == days,
+                                    onClick = { intervalText = days.toString(); error = null },
+                                    label = { Text(label) },
                                 )
                             }
                         }
+
                         Text(
                             "Counted from the last time it was done, so doing it late moves the whole schedule.",
                             style = MaterialTheme.typography.bodySmall,
@@ -1646,20 +1682,21 @@ private fun CreateChoreDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-
-                AnimatedVisibility(visible = error != null) {
-                    Text(
-                        text = error ?: "",
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
             }
         },
         confirmButton = {
             Button(onClick = {
                 if (name.isBlank()) {
                     error = "Name is required"
+                    return@Button
+                }
+                // Checked here rather than left to the backend so the message
+                // names the field the user is looking at.
+                val interval = intervalText.toIntOrNull()
+                if (scheduleType == ScheduleType.INTERVAL &&
+                    (interval == null || interval !in 1..365)
+                ) {
+                    error = "How often must be a number of days between 1 and 365"
                     return@Button
                 }
                 if (rotation.isEmpty()) {
@@ -1670,7 +1707,7 @@ private fun CreateChoreDialog(
                     name,
                     doneLine,
                     scheduleType,
-                    if (scheduleType == ScheduleType.INTERVAL) intervalDays else null,
+                    if (scheduleType == ScheduleType.INTERVAL) interval else null,
                     if (scheduleType == ScheduleType.FIXED_DATE) listOf(weekday) else null,
                     rotation.toList(),
                 )

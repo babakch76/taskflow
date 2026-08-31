@@ -33,6 +33,29 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
 
 ## Bugs
 
+### B-7 · A rejected create closes the dialog and loses what you typed — OPEN
+
+**Reported:** 2026-08-31, hit while testing chore creation against a stale
+server binary.
+
+Both `CreateTaskDialog` and `CreateChoreDialog` set `showCreate… = false` and
+*then* fire the request, so a 400 from the backend surfaces as a snackbar over
+an empty board — the dialog is already gone, and every field the user filled in
+goes with it. On the chore form that is a name, a done-line, a schedule and a
+rotation order.
+
+Client-side validation now catches the common cases before the request (so this
+is rarer than it was), but anything only the server can know — a name that
+collides, a member who left the group mid-edit, a dropped connection — still
+loses the whole form.
+
+**Fix:** keep the dialog open until the call succeeds. That means the dialog
+needs to see `isWorking`/`message` rather than being dismissed optimistically:
+disable Create while in flight, close on success, show the server's message
+in-dialog on failure. The in-dialog error slot already exists.
+
+---
+
 ### B-6 · The undo window doesn't close on its own — OPEN
 
 **Reported:** 2026-08-31, while device-verifying F1.

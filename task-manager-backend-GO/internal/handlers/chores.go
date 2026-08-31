@@ -45,6 +45,13 @@ const occurrenceColumns = `o.id, o.chore_id, o.group_id, o.assigned_to, o.status
 // would otherwise rewrite completions from any point in the past.
 const undoWindow = 10 * time.Minute
 
+// Bounds on an interval chore's period, in days. Wide on purpose — these are
+// here to catch a typo, not to curate the household's choices.
+const (
+	intervalDaysMin = 1
+	intervalDaysMax = 365
+)
+
 // validScheduleTypes mirrors the CHECK constraint on chores.schedule_type.
 var validScheduleTypes = map[string]bool{
 	models.ScheduleInterval:  true,
@@ -735,11 +742,17 @@ func validateSchedule(scheduleType string, intervalDays *int, weekdays, monthDay
 		if intervalDays == nil {
 			return fmt.Errorf("interval_days is required for an interval chore")
 		}
-		// The spec's set: every 1-6 days, weekly, or monthly.
-		switch *intervalDays {
-		case 1, 2, 3, 4, 5, 6, 7, 30:
-		default:
-			return fmt.Errorf("interval_days must be 1-6, 7 (weekly) or 30 (monthly)")
+		// Any whole number of days up to a year.
+		//
+		// The spec enumerates 1-6, weekly and monthly, which is a narrower set
+		// than households actually run on — a fortnightly bin collection has no
+		// entry in it. Nothing downstream depends on the value being one of a
+		// fixed few: the due date is arithmetic either way, and describeSchedule
+		// still names the common ones. The bounds are what matter, and they only
+		// exist to catch a typo: 0 would make a chore due the instant it was
+		// completed, and past a year it is not a rotation any more.
+		if *intervalDays < intervalDaysMin || *intervalDays > intervalDaysMax {
+			return fmt.Errorf("interval_days must be between %d and %d", intervalDaysMin, intervalDaysMax)
 		}
 		if len(weekdays) > 0 || len(monthDays) > 0 {
 			return fmt.Errorf("an interval chore cannot also have fixed dates")

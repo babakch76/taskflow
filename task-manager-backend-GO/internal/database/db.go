@@ -109,7 +109,9 @@ func migrate(db *sql.DB) error {
 		-- this is a treaty, not a manual. Enforced in the handler too.
 		done_line      TEXT DEFAULT '',
 		schedule_type  TEXT NOT NULL CHECK(schedule_type IN ('interval','fixed_date','as_needed','one_off')),
-		-- interval only: every N days. 1..6, 7 (weekly) or 30 (monthly).
+		-- interval only: every N days, any whole number from 1 to 365. The
+		-- handler holds the bounds; they exist to catch a typo rather than to
+		-- limit the choice.
 		interval_days  INTEGER,
 		-- fixed_date only: comma-separated weekdays (0=Sunday..6) or month days
 		-- (1..31). Exactly one of the two is set.

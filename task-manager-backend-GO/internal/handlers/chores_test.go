@@ -143,6 +143,43 @@ func TestAsNeededChoreHasNoDueDate(t *testing.T) {
 	}
 }
 
+// An interval is any whole number of days, not one of a fixed few. A
+// fortnightly chore is the obvious case the enumerated set had no room for.
+func TestIntervalAcceptsAnyNumberOfDays(t *testing.T) {
+	db := newTestDB(t)
+	owner := newUser(t, db, "owner")
+	groupID := newGroup(t, db, owner, "Flat")
+
+	for _, days := range []int{1, 9, 14, 45, 365} {
+		t.Run(fmt.Sprintf("every %d days", days), func(t *testing.T) {
+			chore := createChore(t, db, groupID, owner, fmt.Sprintf(`{
+				"name": "Chore %d", "schedule_type": "interval",
+				"interval_days": %d, "rotation": [%q]
+			}`, days, days, owner))
+
+			if chore.IntervalDays == nil || *chore.IntervalDays != days {
+				t.Fatalf("interval_days: got %v, want %d", chore.IntervalDays, days)
+			}
+
+			// The due date is arithmetic, so an off-preset interval must land
+			// exactly as a preset one does.
+			var due *time.Time
+			for _, o := range listOccurrences(t, db, groupID, owner) {
+				if o.ChoreID == chore.ID {
+					due = o.DueDate
+				}
+			}
+			if due == nil {
+				t.Fatal("no due date on the first occurrence")
+			}
+			want := time.Now().AddDate(0, 0, days).YearDay()
+			if due.YearDay() != want {
+				t.Errorf("due %s is not %d days out", due.Format(time.RFC3339), days)
+			}
+		})
+	}
+}
+
 func TestCreateChoreRejectsInvalidInput(t *testing.T) {
 	db := newTestDB(t)
 	owner := newUser(t, db, "owner")
@@ -185,9 +222,14 @@ func TestCreateChoreRejectsInvalidInput(t *testing.T) {
 			want: "interval_days is required for an interval chore",
 		},
 		{
-			name: "interval outside the allowed set",
-			body: fmt.Sprintf(`{"name":"X","schedule_type":"interval","interval_days":9,"rotation":[%q]}`, owner),
-			want: "interval_days must be 1-6, 7 (weekly) or 30 (monthly)",
+			name: "interval of zero days",
+			body: fmt.Sprintf(`{"name":"X","schedule_type":"interval","interval_days":0,"rotation":[%q]}`, owner),
+			want: "interval_days must be between 1 and 365",
+		},
+		{
+			name: "interval beyond a year",
+			body: fmt.Sprintf(`{"name":"X","schedule_type":"interval","interval_days":400,"rotation":[%q]}`, owner),
+			want: "interval_days must be between 1 and 365",
 		},
 		{
 			name: "fixed_date with both weekdays and month days",
