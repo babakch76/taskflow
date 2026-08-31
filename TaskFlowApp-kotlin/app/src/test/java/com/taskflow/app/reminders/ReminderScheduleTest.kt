@@ -170,6 +170,43 @@ class ReminderScheduleTest {
         assertEquals(at(4, 9), reminders[1].at)
     }
 
+    // ── catching up ──────────────────────────────────────────────
+
+    @Test
+    fun `a future reminder is left alone`() {
+        val reminder = ReminderSchedule.Reminder("occ-1", ReminderSchedule.Kind.TURN_START, at(5, 12))
+        assertEquals(reminder, ReminderSchedule.catchUp(reminder, at(4, 12), default))
+    }
+
+    @Test
+    fun `a turn that started while the app was closed still notifies`() {
+        // This is the case the whole catch-up rule exists for. TURN_START is
+        // computed from the occurrence's creation, which is always in the past
+        // by the time the device fetches it — arming only future times would
+        // mean this reminder never fired at all.
+        val reminder = ReminderSchedule.Reminder("occ-1", ReminderSchedule.Kind.TURN_START, at(4, 8))
+        val caught = ReminderSchedule.catchUp(reminder, at(4, 12), default)!!
+
+        assertEquals(at(4, 12), caught.at)
+        assertEquals(ReminderSchedule.Kind.TURN_START, caught.kind)
+    }
+
+    @Test
+    fun `catching up still respects quiet hours`() {
+        val reminder = ReminderSchedule.Reminder("occ-1", ReminderSchedule.Kind.TURN_START, at(4, 21, 30))
+        val caught = ReminderSchedule.catchUp(reminder, at(4, 22), default)!!
+
+        assertEquals(at(5, 9), caught.at)
+    }
+
+    @Test
+    fun `a reminder older than the window is dropped rather than fired late`() {
+        // A turn that started last week is not news, and a first run must not
+        // notify about every chore already sitting on your row.
+        val reminder = ReminderSchedule.Reminder("occ-1", ReminderSchedule.Kind.TURN_START, at(1, 12))
+        assertNull(ReminderSchedule.catchUp(reminder, at(4, 12), default))
+    }
+
     // ── the still-waiting nudge ──────────────────────────────────
 
     @Test

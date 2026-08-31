@@ -29,15 +29,45 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
   and the unified turn rule — a cover counts as the doer's turn, the chore goes
   back to whoever owed it, and the rotation resumes after the coverer.
   Device-verified at each step.
-- **F3 (reminders + quiet hours) — NEXT** per the spec's build order. It closes
-  the existing backend notification TODO. Note F5's busy pass is the other
-  consumer of the turn rule, and `resume_after` already carries what it needs.
+- **F3 (reminders + quiet hours) — DONE**, in three commits. Reminders are
+  scheduled **on the device** with AlarmManager — no Firebase, no push service,
+  no server-side scheduler, and nothing about anyone's chores leaves the phone.
+  Quiet hours live on the user record so they survive a reinstall. Two reminders
+  per occurrence to the assignee only, plus a flat 48-hourly nudge for anything
+  still open. See B-8 for the one gap this delivery choice leaves.
+- **F4 (done-line + edit diffs) — NEXT**, and mostly already built: the done
+  line is stored, capped at 140, editable, and offered at chore creation, and
+  chore edits already broadcast a diff. What's missing is showing the line where
+  an occurrence is read. F5 (busy/away) is the larger remaining piece, and its
+  pass should reuse `nextTurn` rather than growing a second copy of the rule.
 - Multi-select and bulk status were removed with F1. The backend endpoint
   survives, unused by the client.
 
 ---
 
 ## Bugs
+
+### B-8 · Reminders only cover the group whose board you last opened — OPEN
+
+**Reported:** 2026-09-01, while building F3.
+
+Reminders are scheduled on the device from the board's data, and the board is
+per-group. `GroupDetailScreen` is the only thing that calls
+`ReminderScheduler.reschedule`, so a user in two households gets reminders for
+whichever board they opened most recently, and the other group's turns pass
+unmentioned.
+
+**Not a problem for the common case.** The spec's household is one group, and a
+user in exactly one group lands straight on its board at login — so their
+reminders are always current. This only bites the multi-group user.
+
+**Fix:** schedule from somewhere that sees every group. The Dashboard already
+lists them, so it could fetch occurrences per group and hand the union to the
+scheduler — N requests where N is the number of households, which is 1 or 2 in
+practice. The scheduler itself needs no change: it is keyed by occurrence and
+replaces its whole set each time, so feeding it more occurrences is enough.
+
+---
 
 ### B-7 · A rejected create closes the dialog and loses what you typed — OPEN
 

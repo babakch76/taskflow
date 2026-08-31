@@ -14,6 +14,7 @@ import com.taskflow.app.data.model.MemberInfo
 import com.taskflow.app.data.model.Occurrence
 import com.taskflow.app.data.model.Patchable
 import com.taskflow.app.data.model.Task
+import com.taskflow.app.data.model.UpdateMeRequest
 import com.taskflow.app.data.model.UpdateOccurrenceRequest
 import com.taskflow.app.data.model.UpdateTaskRequest
 import com.taskflow.app.data.model.isOpen
@@ -54,6 +55,9 @@ data class GroupDetailUiState(
     /** Chore definitions, for rendering a schedule and for editing. */
     val chores: List<Chore> = emptyList(),
     val members: List<MemberInfo> = emptyList(),
+    /** The signed-in user's quiet-hours window (F3), for the settings dialog. */
+    val quietFrom: String = "21:00",
+    val quietTo: String = "09:00",
     val activity: List<ActivityEvent> = emptyList(),
     /** Fatal error for the whole screen — shows the retry state. */
     val error: String? = null,
@@ -108,6 +112,8 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
             val choresDeferred = async { runCatching { api.listChores(groupId) } }
             val membersDeferred = async { runCatching { api.listMembers(groupId) } }
             val activityDeferred = async { runCatching { api.listActivity(groupId) } }
+            // Quiet hours, for the on-device reminder scheduler (F3).
+            val meDeferred = async { runCatching { api.getMe() } }
 
             val groupRes = groupDeferred.await()
             val tasksRes = tasksDeferred.await()
@@ -115,6 +121,7 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
             val choresRes = choresDeferred.await()
             val membersRes = membersDeferred.await()
             val activityRes = activityDeferred.await()
+            val meRes = meDeferred.await()
 
             // The group call is the one that must succeed — without it there is
             // no screen to show. A 404 here also means the membership guard
@@ -130,6 +137,7 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
                 return@launch
             }
 
+            val me = meRes.getOrNull()?.takeIf { it.isSuccessful }?.body()
             val activity = activityRes.getOrNull()?.takeIf { it.isSuccessful }?.body().orEmpty()
             activityCursor = activity.firstOrNull()?.createdAt?.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
 
@@ -142,6 +150,10 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
                 chores = choresRes.getOrNull()?.takeIf { it.isSuccessful }?.body().orEmpty(),
                 members = membersRes.getOrNull()?.takeIf { it.isSuccessful }?.body().orEmpty(),
                 activity = activity,
+                // Falls back to the current state, which starts at the spec's
+                // default — a failed /me must not silently widen the window.
+                quietFrom = me?.quietFrom ?: _uiState.value.quietFrom,
+                quietTo = me?.quietTo ?: _uiState.value.quietTo,
             )
         }
     }
@@ -393,6 +405,40 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
         val target = if (occurrence.isOpen) "done" else "open"
         runAction(successMessage = if (target == "done") "Marked done" else "Completion undone") {
             api.updateOccurrence(groupId, occurrence.id, UpdateOccurrenceRequest(status = target))
+        }
+    }
+
+    /**
+     * Move the quiet-hours window (F3).
+     *
+     * Not routed through [runAction]: that refreshes the board and reloads the
+     * activity feed, and this changes neither. The new window is folded into
+     * state directly, which is also what re-triggers rescheduling on the screen.
+     */
+    fun setQuietHours(from: String, to: String) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isWorking = true, message = null)
+            val response = runCatching { api.updateMe(UpdateMeRequest(quietFrom = from, quietTo = to)) }
+                .getOrElse {
+                    _uiState.value = _uiState.value.copy(isWorking = false, message = networkMessage(it))
+                    return@launch
+                }
+
+            val updated = response.body()
+            if (!response.isSuccessful || updated == null) {
+                _uiState.value = _uiState.value.copy(
+                    isWorking = false,
+                    message = ApiErrors.messageFor(response),
+                )
+                return@launch
+            }
+
+            _uiState.value = _uiState.value.copy(
+                isWorking = false,
+                quietFrom = updated.quietFrom,
+                quietTo = updated.quietTo,
+                message = "Quiet hours updated",
+            )
         }
     }
 

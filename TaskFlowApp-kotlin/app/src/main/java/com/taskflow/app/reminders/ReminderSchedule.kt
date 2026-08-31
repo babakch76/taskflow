@@ -90,6 +90,36 @@ object ReminderSchedule {
     }
 
     /**
+     * How late a scheduled reminder may be and still be worth sending.
+     *
+     * Reminders are computed on the device from data it has just fetched, so a
+     * moment has almost always already passed by the time it is seen: your turn
+     * started when somebody else finished theirs, which could have been while
+     * the app was closed. Arming only future times would mean the turn-start
+     * reminder never fired at all.
+     */
+    val CATCH_UP_WINDOW: Duration = Duration.ofHours(24)
+
+    /**
+     * Adjusts a scheduled reminder for the fact that its moment may already
+     * have gone by.
+     *
+     * Returns the reminder to arm, or **null** if it is too late to be worth
+     * sending — the caller should record that one as spent so it never fires.
+     *
+     * The window is what stops a first run notifying about every chore already
+     * on your row. A turn that started last week is not news; the board has
+     * been showing it the whole time, and a burst of catch-up notifications is
+     * exactly the pile-on this design avoids.
+     */
+    fun catchUp(reminder: Reminder, now: OffsetDateTime, quiet: QuietHours): Reminder? = when {
+        reminder.at.isAfter(now) -> reminder
+        reminder.at.isBefore(now.minus(CATCH_UP_WINDOW)) -> null
+        // Recent enough to still matter: send at the next allowed moment.
+        else -> reminder.copy(at = quiet.nextAllowed(now))
+    }
+
+    /**
      * The next "still waiting" nudge for an occurrence that is open past its
      * date, or null if none is owed yet.
      *

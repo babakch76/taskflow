@@ -39,9 +39,18 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.core.content.ContextCompat
 import com.taskflow.app.TaskFlowApp
+import com.taskflow.app.reminders.QuietHours
+import com.taskflow.app.reminders.ReminderScheduler
 import com.taskflow.app.data.model.ActivityEvent
 import com.taskflow.app.data.model.MemberInfo
 import com.taskflow.app.data.model.Occurrence
@@ -89,6 +98,7 @@ fun GroupDetailScreen(
     var selectedTab by remember { mutableIntStateOf(0) }
     var showCreateTask by remember { mutableStateOf(false) }
     var showCreateChore by remember { mutableStateOf(false) }
+    var showQuietHours by remember { mutableStateOf(false) }
     var showInvite by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
     var confirmLeave by remember { mutableStateOf(false) }
@@ -119,6 +129,37 @@ fun GroupDetailScreen(
     // Leaving may have deleted the group, so get off this screen.
     LaunchedEffect(state.hasLeft) {
         if (state.hasLeft) onBack()
+    }
+
+    // F3 — ask once for permission to notify. Refusing costs only reminders:
+    // the board has never depended on them, so there is nothing to explain and
+    // nothing to re-ask for.
+    val notificationPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { /* granted or not, the app works the same */ }
+
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(
+                context, Manifest.permission.POST_NOTIFICATIONS,
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    // Re-arm reminders whenever the board or the quiet window changes.
+    //
+    // Rescheduling is a full replacement and skips anything already delivered,
+    // so running it on every board change is safe and keeps the alarms in step
+    // with a rotation that may have moved while we were away.
+    LaunchedEffect(state.occurrences, state.chores, state.quietFrom, state.quietTo, myUserId) {
+        ReminderScheduler.reschedule(
+            context = context.applicationContext,
+            occurrences = state.occurrences,
+            chores = state.chores,
+            myUserId = myUserId,
+            quiet = QuietHours.parse(state.quietFrom, state.quietTo),
+        )
     }
 
     LaunchedEffect(state.message) {
@@ -169,6 +210,11 @@ fun GroupDetailScreen(
                                 text = { Text("Create invite code") },
                                 leadingIcon = { Icon(Icons.Default.Link, null) },
                                 onClick = { showMenu = false; viewModel.generateInviteCode() },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Quiet hours") },
+                                leadingIcon = { Icon(Icons.Default.Notifications, null) },
+                                onClick = { showMenu = false; showQuietHours = true },
                             )
                             HorizontalDivider()
                             DropdownMenuItem(
@@ -361,6 +407,18 @@ fun GroupDetailScreen(
             onCreate = { name, doneLine, scheduleType, intervalDays, weekdays, rotation ->
                 showCreateChore = false
                 viewModel.createChore(name, doneLine, scheduleType, intervalDays, weekdays, rotation)
+            },
+        )
+    }
+
+    if (showQuietHours) {
+        QuietHoursDialog(
+            from = state.quietFrom,
+            to = state.quietTo,
+            onDismiss = { showQuietHours = false },
+            onSave = { from, to ->
+                showQuietHours = false
+                viewModel.setQuietHours(from, to)
             },
         )
     }
@@ -1481,6 +1539,89 @@ private fun RoleChip(role: String) {
 // ═══════════════════════════════════════════════════════════════
 // Dialogs
 // ═══════════════════════════════════════════════════════════════
+
+/**
+ * Quiet hours (F3).
+ *
+ * The window when the app will not notify you. A reminder that would land
+ * inside it is held until the window opens, not dropped — which is worth saying
+ * on the dialog, because "quiet hours" could as easily mean "cancelled".
+ *
+ * The default wraps midnight, so the two fields are not a simple range and the
+ * copy avoids implying they are.
+ */
+@Composable
+private fun QuietHoursDialog(
+    from: String,
+    to: String,
+    onDismiss: () -> Unit,
+    onSave: (String, String) -> Unit,
+) {
+    var fromText by remember { mutableStateOf(from) }
+    var toText by remember { mutableStateOf(to) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    // "HH:MM", 24-hour. Kept deliberately strict so what the user types is
+    // exactly what the server stores.
+    fun valid(value: String): Boolean =
+        Regex("""^([01]\d|2[0-3]):([0-5]\d)$""").matches(value)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Quiet hours", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                AnimatedVisibility(visible = error != null) {
+                    Text(
+                        text = error ?: "",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Text(
+                    "Reminders won't arrive between these times. Anything due in that window waits until it's over — nothing is lost.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = fromText,
+                        onValueChange = { fromText = it.take(5); error = null },
+                        label = { Text("From") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedTextField(
+                        value = toText,
+                        onValueChange = { toText = it.take(5); error = null },
+                        label = { Text("Until") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Text(
+                    "24-hour, like 21:00.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                if (!valid(fromText) || !valid(toText)) {
+                    error = "Use 24-hour times, like 21:00"
+                    return@Button
+                }
+                if (fromText == toText) {
+                    error = "Start and end can't be the same time"
+                    return@Button
+                }
+                onSave(fromText, toText)
+            }) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
 
 /**
  * New chore — a definition, not a to-do.
