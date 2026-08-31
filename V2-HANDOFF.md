@@ -4,7 +4,6 @@ Written 2026-08-21, at the end of the chat that removed the manager role and
 built F1. Read this first, then `BACKLOG.md`, then the spec.
 
 **The spec is the build contract:** `C:\Users\babak\Downloads\taskflow_feature_spec_2.md`
-(not in the repo — copy it in if you want it versioned).
 
 ---
 
