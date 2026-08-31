@@ -43,6 +43,7 @@ import com.taskflow.app.TaskFlowApp
 import com.taskflow.app.data.model.ActivityEvent
 import com.taskflow.app.data.model.MemberInfo
 import com.taskflow.app.data.model.Task
+import com.taskflow.app.data.model.isOpen
 import kotlinx.coroutines.delay
 import java.time.Duration
 import java.time.Instant
@@ -86,8 +87,6 @@ fun GroupDetailScreen(
     var showInvite by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
     var confirmLeave by remember { mutableStateOf(false) }
-    // Multi-select is pure UI state, so it lives here rather than in the VM.
-    var selectedTasks by remember { mutableStateOf(setOf<String>()) }
     // Task pending deletion — deleting is irreversible, so it goes via a confirm.
     var taskToDelete by remember { mutableStateOf<Task?>(null) }
     // Detail sheet holds an *id*, not a Task. The Task is looked up from state
@@ -124,40 +123,28 @@ fun GroupDetailScreen(
         }
     }
 
-    val inSelectionMode = selectedTasks.isNotEmpty()
-
-    // Back should cancel the selection, not abandon the screen — that's what
-    // every other multi-select on the platform does.
-    BackHandler(enabled = inSelectionMode) {
-        selectedTasks = emptySet()
-    }
-
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
                     Text(
-                        text = if (inSelectionMode) "${selectedTasks.size} selected"
-                        else state.group?.name ?: "Group",
+                        text = state.group?.name ?: "Group",
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 },
                 navigationIcon = {
-                    IconButton(
-                        onClick = { if (inSelectionMode) selectedTasks = emptySet() else onBack() }
-                    ) {
+                    IconButton(onClick = onBack) {
                         Icon(
-                            if (inSelectionMode) Icons.Default.Close
-                            else Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = if (inSelectionMode) "Clear selection" else "Back",
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
                         )
                     }
                 },
                 actions = {
-                    if (!inSelectionMode) {
+                    run {
                         IconButton(onClick = { viewModel.refresh() }) {
                             Icon(Icons.Default.Refresh, contentDescription = "Refresh")
                         }
@@ -192,7 +179,7 @@ fun GroupDetailScreen(
             )
         },
         floatingActionButton = {
-            if (selectedTab == 0 && !inSelectionMode && state.group != null) {
+            if (selectedTab == 0 && state.group != null) {
                 ExtendedFloatingActionButton(
                     onClick = { showCreateTask = true },
                     icon = { Icon(Icons.Default.Add, contentDescription = null) },
@@ -223,15 +210,7 @@ fun GroupDetailScreen(
                 else -> {
                     state.group?.let { ProgressHeader(it.totalTasks, it.doneTasks, it.progress) }
 
-                    // Bulk action bar replaces the tab row while selecting.
-                    if (inSelectionMode) {
-                        BulkActionBar(
-                            onApply = { status ->
-                                viewModel.bulkSetStatus(selectedTasks, status)
-                                selectedTasks = emptySet()
-                            },
-                        )
-                    } else {
+                    run {
                         // Scrollable, not fixed: four labels with counts don't
                         // fit a phone's width, and a fixed TabRow wraps
                         // "Members (4)" onto two lines rather than shrinking.
@@ -271,19 +250,28 @@ fun GroupDetailScreen(
                         0 -> TaskList(
                             tasks = state.tasks,
                             members = state.members,
-                            selected = selectedTasks,
-                            onToggleSelect = { id ->
-                                selectedTasks = if (id in selectedTasks) selectedTasks - id
-                                else selectedTasks + id
-                            },
+                            myUserId = myUserId,
                             onOpenDetail = { detailTaskId = it.id },
+                            onToggleDone = { task ->
+                                viewModel.setTaskStatus(
+                                    task.id,
+                                    if (task.isOpen) "done" else "todo",
+                                )
+                            },
                             onCreate = { showCreateTask = true },
                         )
 
                         1 -> CalendarTab(
                             tasks = state.tasks,
                             members = state.members,
+                            myUserId = myUserId,
                             onOpenDetail = { detailTaskId = it.id },
+                            onToggleDone = { task ->
+                                viewModel.setTaskStatus(
+                                    task.id,
+                                    if (task.isOpen) "done" else "todo",
+                                )
+                            },
                         )
 
                         2 -> ActivityList(state.activity)
@@ -502,46 +490,31 @@ private fun EmptyBlock(title: String, subtitle: String, action: (@Composable () 
 // Tasks
 // ═══════════════════════════════════════════════════════════════
 
-@Composable
-private fun BulkActionBar(onApply: (String) -> Unit) {
-    Surface(color = MaterialTheme.colorScheme.primaryContainer) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = "Move to:",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-            )
-            TASK_STATUSES.forEach { status ->
-                FilledTonalButton(
-                    onClick = { onApply(status) },
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                ) {
-                    Text(statusLabel(status), style = MaterialTheme.typography.labelMedium)
-                }
-            }
-        }
-    }
-}
-
+/**
+ * The Board — F1.
+ *
+ * Three sections, in this order: **Yours**, **Others**, **Done**. Grouping by
+ * ownership rather than by status is the whole point: the question the board
+ * answers is "what still needs doing and whose is it", so the first thing you
+ * should see is your own name's worth of work.
+ *
+ * Unassigned tasks sit under Others for now. The chore model has no such thing
+ * — "everything on the board always has exactly one name on it" — but tasks
+ * created before that rule exists still can, and hiding them would lose them.
+ */
 @Composable
 private fun TaskList(
     tasks: List<Task>,
     members: List<MemberInfo>,
-    selected: Set<String>,
-    onToggleSelect: (String) -> Unit,
+    myUserId: String?,
     onOpenDetail: (Task) -> Unit,
+    onToggleDone: (Task) -> Unit,
     onCreate: () -> Unit,
 ) {
     if (tasks.isEmpty()) {
         EmptyBlock(
-            title = "No tasks yet",
-            subtitle = "Add the first one and it'll show up for everyone in the group.",
+            title = "Nothing on the board",
+            subtitle = "Add the first task and it'll show up for everyone in the group.",
         ) {
             FilledTonalButton(onClick = onCreate) {
                 Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
@@ -552,16 +525,13 @@ private fun TaskList(
         return
     }
 
-    // Group by status rather than showing one flat list. The backend returns
-    // tasks newest-first regardless of state, so finished work was interleaved
-    // with what still needs doing — the list got less useful the more the group
-    // got done. Order follows TASK_STATUSES, so Done sinks to the bottom.
-    val grouped = remember(tasks) {
-        TASK_STATUSES.mapNotNull { status ->
-            tasks.filter { it.status == status }
-                .takeIf { it.isNotEmpty() }
-                ?.let { status to it }
-        }
+    val sections = remember(tasks, myUserId) {
+        val open = tasks.filter { it.isOpen }
+        listOf(
+            "Yours" to open.filter { it.assignedTo != null && it.assignedTo == myUserId },
+            "Others" to open.filter { it.assignedTo == null || it.assignedTo != myUserId },
+            "Done" to tasks.filterNot { it.isOpen },
+        ).filter { it.second.isNotEmpty() }
     }
 
     LazyColumn(
@@ -574,23 +544,23 @@ private fun TaskList(
         ),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        grouped.forEach { (status, tasksInStatus) ->
-            item(key = "header-$status") {
+        sections.forEach { (label, rows) ->
+            item(key = "header-$label") {
                 Text(
-                    text = "${statusLabel(status)} · ${tasksInStatus.size}",
+                    text = "$label · ${rows.size}",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
                 )
             }
-            items(tasksInStatus, key = { it.id }) { task ->
+            items(rows, key = { it.id }) { task ->
                 TaskCard(
                     task = task,
                     assigneeName = members.firstOrNull { it.id == task.assignedTo }?.username,
-                    isSelected = task.id in selected,
-                    anySelected = selected.isNotEmpty(),
-                    onToggleSelect = { onToggleSelect(task.id) },
+                    doneByName = members.firstOrNull { it.id == task.doneBy }?.username,
+                    myUserId = myUserId,
                     onOpenDetail = { onOpenDetail(task) },
+                    onToggleDone = { onToggleDone(task) },
                 )
             }
         }
@@ -598,34 +568,45 @@ private fun TaskList(
 }
 
 /**
- * One row in the task list.
+ * How long after marking something done you can still take it back. Spec F1:
+ * "Undo within 10 minutes by the person who marked it."
+ */
+private val UNDO_WINDOW: Duration = Duration.ofMinutes(10)
+
+/**
+ * One row on the board.
  *
- * A tap opens the detail sheet. It used to cycle the status in place, which was
- * undiscoverable — nothing on the card said it was tappable, let alone what
- * tapping would do — and a mis-tap silently marked work as done with no undo.
- * Editing now happens somewhere the user can see what they're changing.
+ * The checkbox marks done in a single tap, per F1 — and **anyone** may tick
+ * **anything**, because "I just did it myself" is the common reality and the
+ * board records it rather than fighting it. The assignee's name stays on the
+ * row; who actually did it is kept separately.
  *
- * Delete lives in the sheet too: a destructive control on every row of a list
- * is a lot of accidental-tap surface for an action with no undo.
+ * Tapping the row opens the detail sheet. Past-due-and-open gets a small amber
+ * dot and the date as it is — never red, never a day count, never a badge
+ * (hard constraint 3). The date is information enough.
  */
 @Composable
 private fun TaskCard(
     task: Task,
     assigneeName: String?,
-    isSelected: Boolean,
-    anySelected: Boolean,
-    onToggleSelect: () -> Unit,
+    doneByName: String?,
+    myUserId: String?,
     onOpenDetail: () -> Unit,
+    onToggleDone: () -> Unit,
 ) {
+    val overdue = isOverdue(task)
+    // Undo is offered only to the person who ticked it, and only briefly.
+    // Anything older is history, and history is not editable from the board.
+    val canUndo = !task.isOpen &&
+        task.doneBy != null && task.doneBy == myUserId &&
+        task.doneAt?.let { Duration.between(it, OffsetDateTime.now()) < UNDO_WINDOW } == true
+
     ElevatedCard(
         modifier = Modifier
             .fillMaxWidth()
-            // Once anything is selected, a plain tap extends the selection
-            // rather than opening one task — standard multi-select behaviour.
-            .clickable { if (anySelected) onToggleSelect() else onOpenDetail() },
+            .clickable(onClick = onOpenDetail),
         colors = CardDefaults.elevatedCardColors(
-            containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer
-            else MaterialTheme.colorScheme.surface,
+            containerColor = MaterialTheme.colorScheme.surface,
         ),
         elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
     ) {
@@ -635,7 +616,12 @@ private fun TaskCard(
                 .padding(start = 8.dp, top = 8.dp, end = 12.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Checkbox(checked = isSelected, onCheckedChange = { onToggleSelect() })
+            Checkbox(
+                checked = !task.isOpen,
+                // Ticking is always allowed; unticking only inside the window.
+                enabled = task.isOpen || canUndo,
+                onCheckedChange = { onToggleDone() },
+            )
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -643,30 +629,41 @@ private fun TaskCard(
                     style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
+                    // Dimmed rather than struck through: done work stays
+                    // readable, it just stops asking for attention.
+                    color = if (task.isOpen) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (task.description.isNotBlank()) {
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        text = task.description,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(4.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    StatusChip(task.status)
-                    if (assigneeName != null) {
+                    if (overdue) {
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .clip(CircleShape)
+                                .background(overdueColor()),
+                        )
+                    }
+                    task.dueDate?.let {
                         Text(
-                            text = assigneeName,
+                            text = formatDueDate(it),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (overdue) overdueColor()
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    val who = if (task.isOpen) assigneeName else doneByName
+                    who?.let {
+                        Text(
+                            text = if (task.isOpen) it else "done by $it",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                    if (task.status == "in_progress") StatusChip(task.status)
                 }
             }
 
@@ -867,6 +864,21 @@ private fun TaskDetailSheet(
     }
 }
 
+/**
+ * Amber for past-due, in both themes.
+ *
+ * Hard constraint 3: "No red overdue states, late counters, or shame badges —
+ * dim/amber at most." Material 3's scheme has no warning slot, so these are
+ * explicit; `colorScheme.error` is deliberately not used anywhere overdue is
+ * shown, because red reads as failure and lateness here is not a failure.
+ */
+private val AmberOnLight = androidx.compose.ui.graphics.Color(0xFF9A6700)
+private val AmberOnDark = androidx.compose.ui.graphics.Color(0xFFE3B341)
+
+@Composable
+private fun overdueColor(): androidx.compose.ui.graphics.Color =
+    if (androidx.compose.foundation.isSystemInDarkTheme()) AmberOnDark else AmberOnLight
+
 @Composable
 private fun StatusChip(status: String) {
     val color = when (status) {
@@ -914,7 +926,9 @@ private fun statusLabel(status: String) = when (status) {
 private fun CalendarTab(
     tasks: List<Task>,
     members: List<MemberInfo>,
+    myUserId: String?,
     onOpenDetail: (Task) -> Unit,
+    onToggleDone: (Task) -> Unit,
 ) {
     val zone = remember { ZoneId.systemDefault() }
     val today = remember { LocalDate.now() }
@@ -1039,10 +1053,10 @@ private fun CalendarTab(
                     TaskCard(
                         task = task,
                         assigneeName = members.firstOrNull { it.id == task.assignedTo }?.username,
-                        isSelected = false,
-                        anySelected = false,
-                        onToggleSelect = { onOpenDetail(task) },
+                        doneByName = members.firstOrNull { it.id == task.doneBy }?.username,
+                        myUserId = myUserId,
                         onOpenDetail = { onOpenDetail(task) },
+                        onToggleDone = { onToggleDone(task) },
                     )
                     Spacer(Modifier.height(8.dp))
                 }
@@ -1108,8 +1122,8 @@ private fun CalendarDayCell(
                                 .clip(CircleShape)
                                 .background(
                                     when {
-                                        task.status == "done" -> MaterialTheme.colorScheme.tertiary
-                                        isOverdue(task) -> MaterialTheme.colorScheme.error
+                                        !task.isOpen -> MaterialTheme.colorScheme.tertiary
+                                        isOverdue(task) -> overdueColor()
                                         else -> MaterialTheme.colorScheme.primary
                                     }
                                 )
@@ -1119,7 +1133,7 @@ private fun CalendarDayCell(
                         Text(
                             text = "+",
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (hasOverdue) MaterialTheme.colorScheme.error
+                            color = if (hasOverdue) overdueColor()
                             else MaterialTheme.colorScheme.primary,
                         )
                     }

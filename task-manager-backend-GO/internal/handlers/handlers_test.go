@@ -746,6 +746,122 @@ func TestGetGroupReportsCallerRole(t *testing.T) {
 	}
 }
 
+// --- F1: completion records who and when ------------------------------------
+
+// The board lets anyone mark anything done, and the doer is often not the
+// assignee ("I just did it myself"). Both names have to survive, because the
+// history in F6 cannot be reconstructed after the fact.
+func TestCompletionRecordsDoerAndTime(t *testing.T) {
+	db := newTestDB(t)
+	th := &TaskHandler{DB: db}
+
+	owner := newUser(t, db, "olivia")
+	other := newUser(t, db, "marco")
+	groupID := newGroup(t, db, owner, "Flat 3B")
+	addMember(t, db, groupID, other, RoleMember)
+
+	// Assigned to olivia...
+	taskID := newTask(t, db, groupID, "Take the bins out")
+	if _, err := db.Exec(`UPDATE tasks SET assigned_to = ? WHERE id = ?`, owner, taskID); err != nil {
+		t.Fatalf("assign: %v", err)
+	}
+
+	setStatus := func(actor, status string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		th.UpdateTask(rec, request(
+			http.MethodPatch, "/groups/x/tasks/y", `{"status":"`+status+`"}`, actor,
+			map[string]string{"group_id": groupID, "task_id": taskID},
+		))
+		return rec
+	}
+
+	// ...but marco does it.
+	rec := setStatus(other, "done")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mark done: got %d: %s", rec.Code, rec.Body.String())
+	}
+	var task models.Task
+	if err := json.Unmarshal(rec.Body.Bytes(), &task); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if task.DoneBy == nil || *task.DoneBy != other {
+		t.Fatalf("done_by = %v, want marco (%s)", task.DoneBy, other)
+	}
+	if task.DoneAt == nil {
+		t.Fatal("done_at was not recorded")
+	}
+	if task.AssignedTo == nil || *task.AssignedTo != owner {
+		t.Fatalf("assigned_to = %v; the assignee must survive completion by someone else", task.AssignedTo)
+	}
+
+	// Undo: moving out of done must not leave a stale completion behind.
+	rec = setStatus(other, "todo")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("undo: got %d: %s", rec.Code, rec.Body.String())
+	}
+	// A *fresh* struct, deliberately: done_by/done_at are omitempty, so they
+	// are simply absent from this response, and unmarshalling into the struct
+	// above would leave the previous completion's values sitting in it.
+	var afterUndo models.Task
+	if err := json.Unmarshal(rec.Body.Bytes(), &afterUndo); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if afterUndo.DoneBy != nil || afterUndo.DoneAt != nil {
+		t.Fatalf("undo left done_by=%v done_at=%v", afterUndo.DoneBy, afterUndo.DoneAt)
+	}
+
+	// And confirm against the database, not just the response shape.
+	var doneBy, doneAt sql.NullString
+	if err := db.QueryRow(`SELECT done_by, done_at FROM tasks WHERE id = ?`, taskID).
+		Scan(&doneBy, &doneAt); err != nil {
+		t.Fatalf("read completion columns: %v", err)
+	}
+	if doneBy.Valid || doneAt.Valid {
+		t.Fatalf("undo left done_by=%v done_at=%v in the database", doneBy, doneAt)
+	}
+}
+
+// The bulk path writes status too, so it must keep the same invariant.
+func TestBulkCompletionRecordsDoer(t *testing.T) {
+	db := newTestDB(t)
+	th := &TaskHandler{DB: db}
+
+	owner := newUser(t, db, "olivia")
+	groupID := newGroup(t, db, owner, "Flat 3B")
+	a := newTask(t, db, groupID, "Kitchen")
+	b := newTask(t, db, groupID, "Bathroom")
+
+	call := func(status string) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		th.BulkUpdateTaskStatus(rec, request(
+			http.MethodPatch, "/groups/x/tasks",
+			`{"task_ids":["`+a+`","`+b+`"],"status":"`+status+`"}`, owner,
+			map[string]string{"group_id": groupID},
+		))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("bulk %s: got %d: %s", status, rec.Code, rec.Body.String())
+		}
+	}
+
+	call("done")
+	var doneBy sql.NullString
+	if err := db.QueryRow(`SELECT done_by FROM tasks WHERE id = ?`, a).Scan(&doneBy); err != nil {
+		t.Fatalf("read done_by: %v", err)
+	}
+	if !doneBy.Valid || doneBy.String != owner {
+		t.Fatalf("bulk done_by = %v, want %s", doneBy, owner)
+	}
+
+	call("todo")
+	if err := db.QueryRow(`SELECT done_by FROM tasks WHERE id = ?`, a).Scan(&doneBy); err != nil {
+		t.Fatalf("read done_by: %v", err)
+	}
+	if doneBy.Valid {
+		t.Fatalf("bulk undo left done_by = %v", doneBy.String)
+	}
+}
+
 // --- C5: invite code --------------------------------------------------------
 
 func TestGenerateCodeLengthAndUniqueness(t *testing.T) {

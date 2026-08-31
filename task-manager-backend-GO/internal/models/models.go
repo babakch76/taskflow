@@ -55,6 +55,11 @@ type Task struct {
 	// UpdatedAt is a pointer because the column was added after the fact:
 	// rows written before that migration have NULL until their next update.
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+	// DoneBy is who marked it done, which is not necessarily who it was
+	// assigned to — anyone may complete anything, and the board records the
+	// reality rather than the intention. Both names are kept.
+	DoneBy *string    `json:"done_by,omitempty"`
+	DoneAt *time.Time `json:"done_at,omitempty"`
 }
 
 // ActivityEvent is one entry in a group's audit trail. It is what the Android

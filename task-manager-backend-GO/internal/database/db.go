@@ -89,7 +89,9 @@ func migrate(db *sql.DB) error {
 		status      TEXT NOT NULL DEFAULT 'todo' CHECK(status IN ('todo','in_progress','done')),
 		due_date    DATETIME,
 		created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-		updated_at  DATETIME
+		updated_at  DATETIME,
+		done_by     TEXT REFERENCES users(id),
+		done_at     DATETIME
 	);
 
 	CREATE TABLE IF NOT EXISTS activity_events (
@@ -137,6 +139,11 @@ func addMissingColumns(db *sql.DB) error {
 	}
 	columns := []column{
 		{table: "tasks", name: "updated_at", ddl: `ALTER TABLE tasks ADD COLUMN updated_at DATETIME`},
+		// Who actually completed it and when — recorded from the moment the
+		// board exists, because the completion history cannot be reconstructed
+		// afterwards. The doer is not always the assignee.
+		{table: "tasks", name: "done_by", ddl: `ALTER TABLE tasks ADD COLUMN done_by TEXT REFERENCES users(id)`},
+		{table: "tasks", name: "done_at", ddl: `ALTER TABLE tasks ADD COLUMN done_at DATETIME`},
 	}
 
 	for _, c := range columns {

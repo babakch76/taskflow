@@ -46,6 +46,27 @@ class DashboardViewModel : ViewModel() {
     private val _invites = MutableStateFlow<List<InviteInfo>>(emptyList())
     val invites: StateFlow<List<InviteInfo>> = _invites.asStateFlow()
 
+    /**
+     * Emitted once when the user turns out to be in exactly one group, so the
+     * app can go straight to its board — F1: "board is the app's default
+     * screen after login", and the onboarding loop ends "land on the board".
+     *
+     * One-shot on purpose. Forwarding every time the group list appears would
+     * make Back from the board bounce straight forward again, trapping the
+     * user. [consumeAutoOpen] latches it, and the flag lives as long as this
+     * ViewModel — i.e. as long as the Dashboard's place on the back stack — so
+     * navigating back leaves you on the list, which is what you asked for by
+     * pressing Back.
+     */
+    private val _autoOpenGroupId = MutableStateFlow<String?>(null)
+    val autoOpenGroupId: StateFlow<String?> = _autoOpenGroupId.asStateFlow()
+    private var autoOpenLatched = false
+
+    fun consumeAutoOpen() {
+        autoOpenLatched = true
+        _autoOpenGroupId.value = null
+    }
+
     /** One-shot feedback for an invite action; the screen shows it and clears it. */
     private val _actionMessage = MutableStateFlow<String?>(null)
     val actionMessage: StateFlow<String?> = _actionMessage.asStateFlow()
@@ -78,6 +99,9 @@ class DashboardViewModel : ViewModel() {
                 if (response.isSuccessful) {
                     val groups = response.body() ?: emptyList()
                     _uiState.value = DashboardUiState.Success(groups)
+                    if (!autoOpenLatched && groups.size == 1) {
+                        _autoOpenGroupId.value = groups.first().id
+                    }
                 } else {
                     _uiState.value = DashboardUiState.Error(ApiErrors.messageFor(response))
                 }

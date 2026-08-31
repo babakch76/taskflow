@@ -23,7 +23,7 @@ type TaskHandler struct {
 
 // taskColumns is the single source of truth for the task projection, so every
 // SELECT stays in sync with scanTask and with models.Task.
-const taskColumns = `id, group_id, assigned_to, title, description, status, due_date, created_at, updated_at`
+const taskColumns = `id, group_id, assigned_to, title, description, status, due_date, created_at, updated_at, done_by, done_at`
 
 // validTaskStatuses mirrors the CHECK constraint on tasks.status.
 var validTaskStatuses = map[string]bool{"todo": true, "in_progress": true, "done": true}
@@ -37,7 +37,7 @@ type scanner interface {
 func scanTask(s scanner, t *models.Task) error {
 	return s.Scan(
 		&t.ID, &t.GroupID, &t.AssignedTo, &t.Title, &t.Description,
-		&t.Status, &t.DueDate, &t.CreatedAt, &t.UpdatedAt,
+		&t.Status, &t.DueDate, &t.CreatedAt, &t.UpdatedAt, &t.DoneBy, &t.DoneAt,
 	)
 }
 
@@ -217,6 +217,16 @@ func (h *TaskHandler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		setClauses = append(setClauses, "status = ?")
 		args = append(args, *req.Status)
 		changed = append(changed, "status="+*req.Status)
+
+		// Completion is a fact worth keeping: who did it and when. Moving a
+		// task back out of done clears both, so the columns never describe a
+		// completion that has been undone.
+		if *req.Status == "done" {
+			setClauses = append(setClauses, "done_by = ?", "done_at = CURRENT_TIMESTAMP")
+			args = append(args, userID)
+		} else {
+			setClauses = append(setClauses, "done_by = NULL", "done_at = NULL")
+		}
 	}
 	if req.AssignedTo.Present {
 		setClauses = append(setClauses, "assigned_to = ?")
@@ -331,9 +341,18 @@ func (h *TaskHandler) BulkUpdateTaskStatus(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	updateArgs := append([]any{req.Status}, idArgs...)
+	// Same done_by/done_at invariant as the single-task path.
+	var doneSet string
+	updateArgs := []any{req.Status}
+	if req.Status == "done" {
+		doneSet = ", done_by = ?, done_at = CURRENT_TIMESTAMP"
+		updateArgs = append(updateArgs, userID)
+	} else {
+		doneSet = ", done_by = NULL, done_at = NULL"
+	}
+	updateArgs = append(updateArgs, idArgs...)
 	if _, err := tx.Exec(
-		`UPDATE tasks SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id IN (`+placeholders+`)`,
+		`UPDATE tasks SET status = ?`+doneSet+`, updated_at = CURRENT_TIMESTAMP WHERE id IN (`+placeholders+`)`,
 		updateArgs...,
 	); err != nil {
 		jsonError(w, "internal error", http.StatusInternalServerError)

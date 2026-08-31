@@ -77,6 +77,16 @@ fun DashboardScreen(
 
     val snackbarHostState = remember { SnackbarHostState() }
 
+    // In exactly one household, the group list is a menu with one item — skip
+    // it and land on the board. Fires once; Back then leaves you here.
+    val autoOpenGroupId by viewModel.autoOpenGroupId.collectAsState()
+    LaunchedEffect(autoOpenGroupId) {
+        autoOpenGroupId?.let { id ->
+            viewModel.consumeAutoOpen()
+            onGroupClick(id)
+        }
+    }
+
     // An invite that arrives while you're sitting here should appear on its
     // own. A slower cadence than the activity feed on purpose — invites are
     // rare, and this also refreshes immediately whenever the app is resumed.

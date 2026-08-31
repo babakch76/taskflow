@@ -67,7 +67,20 @@ data class Task(
      */
     @SerializedName("updated_at")
     val updatedAt: OffsetDateTime? = null,
+    /**
+     * Who marked it done, which is not necessarily [assignedTo] — anyone may
+     * complete anything, and the board records what actually happened. Null
+     * while the task is still open.
+     */
+    @SerializedName("done_by")
+    val doneBy: String? = null,
+    @SerializedName("done_at")
+    val doneAt: OffsetDateTime? = null,
 )
+
+/** True when this task is still outstanding — the board's only real distinction. */
+val Task.isOpen: Boolean get() = status != "done"
+
 
 /**
  * One entry in a group's audit trail, from GET /groups/{id}/activity.
