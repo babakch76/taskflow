@@ -62,6 +62,85 @@ type Task struct {
 	DoneAt *time.Time `json:"done_at,omitempty"`
 }
 
+// Schedule types. A chore picks exactly one at creation and cannot change
+// category afterwards — only its parameters.
+const (
+	// ScheduleInterval: every N days, counted from the last *completion*, so a
+	// chore done late shifts the whole schedule with reality.
+	ScheduleInterval = "interval"
+	// ScheduleFixedDate: specific weekdays or month days, because the world sets
+	// the deadline (bin collection). A missed date rolls to the next one with
+	// the same assignee.
+	ScheduleFixedDate = "fixed_date"
+	// ScheduleAsNeeded: rotates with no date at all. One standing occurrence
+	// always exists; completing it advances the turn. No due date, so no due
+	// reminder — and deliberately no "it's needed now" button, which would be a
+	// nag with a disguise on.
+	ScheduleAsNeeded = "as_needed"
+	// ScheduleOneOff: no recurrence. A bill, a repair, a delivery.
+	ScheduleOneOff = "one_off"
+)
+
+// OccurrenceStatus values. The whole set — there is no "missed" state anywhere
+// in the system, by design: a chore can only be not yet done.
+const (
+	OccurrenceOpen = "open"
+	OccurrenceDone = "done"
+)
+
+// DoneLineMaxLen caps F4's "what done means" line. The limit is deliberate:
+// this is a treaty between housemates, not a manual.
+const DoneLineMaxLen = 140
+
+// Chore is a definition — what the chore is, how often it comes round, and the
+// turn order it follows. It is never itself on the board; its occurrences are.
+type Chore struct {
+	ID       string `json:"id"`
+	GroupID  string `json:"group_id"`
+	Name     string `json:"name"`
+	DoneLine string `json:"done_line"`
+
+	ScheduleType string `json:"schedule_type"`
+	// IntervalDays is set only for ScheduleInterval.
+	IntervalDays *int `json:"interval_days,omitempty"`
+	// FixedWeekdays (0=Sunday) and FixedMonthDays (1..31) are set only for
+	// ScheduleFixedDate, and exactly one of the two is non-empty.
+	FixedWeekdays  []int `json:"fixed_weekdays,omitempty"`
+	FixedMonthDays []int `json:"fixed_month_days,omitempty"`
+	// NeededByTime is an optional "HH:MM" clock time.
+	NeededByTime *string `json:"needed_by_time,omitempty"`
+
+	// Rotation is the ordered turn list, by user id, position 0 first.
+	Rotation []string `json:"rotation"`
+
+	CreatedBy string     `json:"created_by"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+}
+
+// Occurrence is one cycle of a chore, assigned to exactly one member.
+//
+// AssignedTo is not a pointer: every occurrence always has exactly one name on
+// it. DoneBy may differ from AssignedTo — anyone may complete anything, and
+// recording who actually did it is what makes covering visible without anyone
+// having to say so.
+type Occurrence struct {
+	ID         string     `json:"id"`
+	ChoreID    string     `json:"chore_id"`
+	GroupID    string     `json:"group_id"`
+	AssignedTo string     `json:"assigned_to"`
+	Status     string     `json:"status"`
+	DueDate    *time.Time `json:"due_date,omitempty"`
+	DoneBy     *string    `json:"done_by,omitempty"`
+	DoneAt     *time.Time `json:"done_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+
+	// ChoreName and DoneLine are joined in so the board can render a row
+	// without a second round trip per occurrence.
+	ChoreName string `json:"chore_name"`
+	DoneLine  string `json:"done_line"`
+}
+
 // ActivityEvent is one entry in a group's audit trail. It is what the Android
 // client polls for to keep members aware of each other's changes.
 type ActivityEvent struct {
@@ -156,6 +235,50 @@ type UpdateTaskRequest struct {
 type BulkUpdateTaskStatusRequest struct {
 	TaskIDs []string `json:"task_ids"`
 	Status  string   `json:"status"`
+}
+
+// CreateChoreRequest defines a chore and, implicitly, its first occurrence.
+//
+// Rotation must contain at least one member: an occurrence always has exactly
+// one name on it, so a chore with nobody in its rotation could never spawn one.
+type CreateChoreRequest struct {
+	Name           string   `json:"name"`
+	DoneLine       string   `json:"done_line"`
+	ScheduleType   string   `json:"schedule_type"`
+	IntervalDays   *int     `json:"interval_days,omitempty"`
+	FixedWeekdays  []int    `json:"fixed_weekdays,omitempty"`
+	FixedMonthDays []int    `json:"fixed_month_days,omitempty"`
+	NeededByTime   *string  `json:"needed_by_time,omitempty"`
+	Rotation       []string `json:"rotation"`
+	// DueDate applies to one-off chores only, which are assigned at creation by
+	// the creator and have no recurrence to derive a date from. RFC3339.
+	DueDate *string `json:"due_date,omitempty"`
+}
+
+// UpdateChoreRequest edits a chore. Open to any member by design — the spec
+// replaces an approval flow with a diff broadcast to the whole group.
+//
+// ScheduleType is absent on purpose: a chore cannot change category, only its
+// parameters. Changing category would make the existing open occurrence's due
+// date meaningless, and re-deriving it silently is worse than requiring a new
+// chore.
+type UpdateChoreRequest struct {
+	Name           *string       `json:"name,omitempty"`
+	DoneLine       *string       `json:"done_line,omitempty"`
+	IntervalDays   *int          `json:"interval_days,omitempty"`
+	FixedWeekdays  []int         `json:"fixed_weekdays,omitempty"`
+	FixedMonthDays []int         `json:"fixed_month_days,omitempty"`
+	NeededByTime   NullableField `json:"needed_by_time"`
+	Rotation       []string      `json:"rotation,omitempty"`
+}
+
+// UpdateOccurrenceRequest is the board's one-tap completion, and its undo.
+//
+// Status is the only field: an occurrence's assignee is decided by rotation,
+// never by hand, and its due date by the schedule. Reassignment happens through
+// the busy pass (F5), not through this endpoint.
+type UpdateOccurrenceRequest struct {
+	Status string `json:"status"`
 }
 
 type GroupWithProgress struct {

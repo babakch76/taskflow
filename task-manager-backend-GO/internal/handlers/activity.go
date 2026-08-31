@@ -18,9 +18,20 @@ const (
 	EventTaskUpdated      = "task_updated"
 	EventTaskDeleted      = "task_deleted"
 	EventTasksBulkUpdated = "tasks_bulk_updated"
-	EventMemberJoined     = "member_joined"
-	EventMemberLeft       = "member_left"
-	EventInviteAccepted   = "invite_accepted"
+	// The chore model (F2). Chore create/edit/delete are group-visible changes
+	// and are broadcast, per constraint 7.
+	EventChoreCreated = "chore_created"
+	EventChoreUpdated = "chore_updated"
+	EventChoreDeleted = "chore_deleted"
+	// Completions are recorded in the feed, which anyone may look at. Note this
+	// is the audit trail, not a push: nothing about an occurrence being open or
+	// late is ever pushed to anyone (constraints 2 and 7).
+	EventOccurrenceDone     = "occurrence_done"
+	EventOccurrenceReopened = "occurrence_reopened"
+
+	EventMemberJoined   = "member_joined"
+	EventMemberLeft     = "member_left"
+	EventInviteAccepted = "invite_accepted"
 	// No longer emitted — the manager role was removed. Kept because rows
 	// written before that still carry this value.
 	EventMemberRoleChanged = "member_role_changed"
