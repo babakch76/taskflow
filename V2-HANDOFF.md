@@ -28,9 +28,12 @@ that bite in code:
 - **Constraint 3** — no red overdue states, no late counters, no shame badges.
   Amber or dim at most. `colorScheme.error` must not appear anywhere overdue is
   rendered. (Fixed in F1; keep it that way.)
-- **Constraint 5** — no calendar *integration* or free/busy scheduling. The
-  read-only month view of due dates was kept on that reading. Say so explicitly
-  in the report, because a stricter reading would call it a violation.
+- **Constraint 5** — no calendar *integration* or free/busy scheduling. A
+  read-only month view of due dates was kept for a while on that reading, with
+  a note here to defend it in the report. **It has since been deleted** (UI
+  cleanup phase 3a) — not to settle the argument but because it only ever read
+  `tasks`, so it showed the one-off minority of the work and hid every rotation
+  chore. There is now no calendar in the app and nothing to defend.
 
 ---
 
@@ -121,7 +124,7 @@ happens when the board is read.
 | Decision | Choice |
 |---|---|
 | Manager role | Removed. Nothing is role-gated now. |
-| Calendar | Kept, as a secondary group tab. The Board is the home screen. |
+| Calendar | **Deleted** (UI cleanup phase 3a). It was kept as a secondary tab through F1–F6; it never learned about occurrences, and a calendar that does would be the scheduling view constraint 5 rules out. The Board is the screen. |
 | Branching | F1 went to `main`. **F2 and everything after goes on a `v2-chores` integration branch**, so `main` keeps a working demo and installable APK. |
 | Board placement | Replaced the Tasks tab in place, not a new tab. |
 | Navigation | One group → straight to its board; several → the list. |

@@ -93,6 +93,26 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
   intact and "Network error: Failed to connect to /10.0.2.2:8080" in its own
   error slot (B-7 not regressed), and pressing Create again once the server was
   back submitted the same form successfully.
+- **The board is the screen — DONE** (2026-09-02, UI cleanup phase 3), in four
+  commits:
+  - **Calendar tab deleted.** It read `state.tasks` only, so it showed the
+    one-off minority of the household's work and hid every rotation chore — on
+    the test board it claimed "1 task due this month" while five chores sat on
+    the board. Teaching it about occurrences would have meant building the
+    scheduling view constraint 5 rules out, so it went instead. That also
+    retires the generous reading of constraint 5 the handoff flagged: there is
+    no calendar to defend in the report now. Tabs are **Board / Activity /
+    Members**, and a plain `TabRow` again.
+  - **Quiet hours moved to the Dashboard menu.** It is stored on the user
+    record and applies to every group, but it was reached from one group's
+    overflow menu. Saving it there now also re-arms every group's alarms,
+    because the Dashboard is what schedules them (see B-8).
+  - **Away is visible on your own board.** A quiet banner above the sections,
+    only while you are away in this group, with an inline "I'm back". Away
+    already showed on the member list and in rotation pickers — everywhere
+    except the screen the away person is actually looking at.
+  - **The Board tab counts open rows** (B-11).
+  Device-verified throughout; the details are in each commit message.
 - Multi-select and bulk status were removed with F1, and the backend endpoint
   behind them is **now gone too** — nothing had called it since, and the
   ViewModel wrapper was unreachable from any screen. The
@@ -146,14 +166,15 @@ go-ahead first.
 
 ---
 
-### B-11 · Board tab count includes done rows — OPEN
+### B-11 · Board tab count includes done rows — DONE (2026-09-02)
 
-**Reported:** 2026-09-01, same pass. Scheduled work: this is phase 3d of the
-UI cleanup prompt, recorded here so it is not lost if the phases stall.
+**Reported:** 2026-09-01. **Fixed** in UI cleanup phase 3d.
 
-`Board (${tasks.size + occurrences.size})` counts every row including the done
-ones, so finishing a chore never moves the number. Count open rows, or drop the
-number.
+`Board (${tasks.size + occurrences.size})` counted every row including the done
+ones, so finishing a chore never moved the number — the one moment the count
+should visibly change was the one moment it didn't. It now counts open rows of
+both shapes. Verified on the emulator: six open rows read "Board (6)"; ticking
+one off left "Board (5)" with one row under Done.
 
 ---
 
