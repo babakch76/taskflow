@@ -88,11 +88,26 @@ existing tasks are the spec's one-off type already. The board shows both shapes
 through one `BoardRow`. The migration was run against a populated database to
 confirm it adds tables without disturbing what is there.
 
+**F3 to F6 are done too**, on the same branch and to the same pattern: backend
+first with tests, then the client, each step driven on the emulator before
+being committed. Section 5 lists what each one landed. Two of them started by
+correcting something behind them rather than adding a view —
+F6 turned away from a flag into a record, because history has to be able to say
+someone was absent *then*, not just now.
+
 **One deliberate departure from the spec.** It enumerates interval periods as
 1-6 days, weekly and monthly. That set has no entry for a fortnightly bin
 collection, so an interval is now any number of days from 1 to 365. Nothing
 downstream depended on the fixed set — the due date is arithmetic either way.
 Say so in the report rather than letting a reader find it.
+
+**Deliveries that differ from a literal reading, both worth stating in the
+report:** reminders are scheduled on the device rather than pushed from a
+server, because the spec's rules are all "to the assignee, about their own
+chore", which a phone can decide alone — the cost is that a turn starting while
+the app is closed is noticed at the next sync. And no scheduler exists at all,
+so the one other time-based behaviour (rolling a missed fixed date forward)
+happens when the board is read.
 
 ---
 
@@ -135,40 +150,50 @@ Say so in the report rather than letting a reader find it.
 
 ---
 
-## 5. Next step: F3
+## 5. Next step: deployment, not features
 
-The spec's build order, item 3 — reminders and quiet hours. It closes the
-existing backend notification TODO, and it is the first feature that needs
-anything outside the app's own request/response cycle.
+**The spec's build order is complete.** F1 through F6 are built, tested and
+device-verified, on `v2-chores`:
 
-Worth settling before writing code: there is **no scheduler in this project**.
-F2's one time-based behaviour (rolling a missed fixed date forward) is done
-lazily when the board is read, which works because nobody can see a stale date
-without reading the board. A reminder cannot use that trick — it has to fire
-when nobody is looking. So F3 needs a real answer to "what wakes the server up",
-and that decision shapes the rest of it.
+| | |
+|---|---|
+| F1 | The board — Yours / Others / Done, one-tap completion by anyone, 10-minute undo |
+| F2 | Chores, occurrences, four schedule types, spawning, the unified turn rule |
+| F3 | Reminders scheduled on the device, quiet hours on the user record |
+| F4 | The done-line shown and editable, with the edit diff broadcast |
+| F5 | Busy pass and away, both reusing the turn rule |
+| F6 | History — per chore and per person, ranking nothing |
 
-The constraints do a lot of the design work here: exactly two notifications per
-occurrence, to the assignee only; quiet hours 21:00–09:00 per user; no member
-can ever trigger a notification to another member; and lateness is never pushed
-to anyone, only shown on the board to whoever looks.
+What is left is not features:
 
-### The F2 rules now in code — don't quietly undo them
+1. **Deploy.** See section 4 — AWS is behind everything since F1, and the
+   security group still blocks SSH. `migrate()` has been exercised against a
+   populated database at every step, including two backfills, so the deploy
+   itself should be uneventful.
+2. **Merge `v2-chores` into `main`**, once the deployed build is confirmed.
+   `main` still holds the pre-v2 demo deliberately.
+3. **The report.** The non-goals in the spec's "considered and rejected" section
+   are worth keeping, and several decisions here were deliberate departures
+   worth naming — the interval departure in section 2, and the reading of
+   constraint 5 that kept the calendar tab.
 
-- **Rotation advances on completion, never on the calendar.** An undone chore
-  stays with the same person. Interval chores sit there with a past due date;
-  fixed-date chores roll to the next date with the *same* assignee, which
-  `rollForwardFixedDates` does on read and which only ever writes `due_date`.
-- **The unified turn rule** (`nextTurn`). Completed by anyone other than its
-  assignee — and, at F5, passed via busy — *counts as the doer's turn*: the
-  next occurrence goes back to the original assignee, and rotation resumes after
-  the doer, which is what `resume_after` on the occurrence is for. F5's busy
-  pass is the same rule with a different trigger, so it should reuse `nextTurn`
-  rather than growing a second copy of it.
-- There is **no `missed` state**, and the schema refuses one. Overdue is a
-  rendering decision, not a status.
+### The rules now in code — don't quietly undo them
 
----
+- **Rotation advances on completion, never on the calendar.** Interval chores
+  sit with a past due date; fixed-date chores roll to the next date with the
+  *same* assignee (`rollForwardFixedDates`, which only ever writes due_date).
+- **The unified turn rule** (`nextTurn`) covers three things with one rule:
+  a voluntary cover, a busy pass, and the overflowing bin. `passed_from` is what
+  lets a pass reuse it; `resume_after` is what makes the rotation resume after
+  the coverer rather than the repayer.
+- **Away is not a debt.** It never cancels a turn already owed, and it is a
+  record (`away_periods`) rather than a flag, because F6 has to be able to say
+  someone was absent *then*.
+- **There is no `missed` state**, and the schema refuses one. Overdue is a
+  rendering decision.
+- **History ranks nothing.** People come back in join order with the zeroes
+  included, and lateness is two dates rather than a flag. Both are tested, and
+  both are the kind of thing a later "improvement" would quietly break.
 
 ## 6. Environment — things that cost hours if you don't know them
 

@@ -46,14 +46,20 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.core.content.ContextCompat
 import com.taskflow.app.TaskFlowApp
 import com.taskflow.app.reminders.QuietHours
 import com.taskflow.app.reminders.ReminderScheduler
 import com.taskflow.app.data.model.ActivityEvent
+import com.taskflow.app.data.model.Absence
 import com.taskflow.app.data.model.Chore
+import com.taskflow.app.data.model.ChoreHistory
+import com.taskflow.app.data.model.ChoreHistoryEntry
+import com.taskflow.app.data.model.GroupHistory
 import com.taskflow.app.data.model.MemberInfo
 import com.taskflow.app.data.model.Occurrence
 import com.taskflow.app.data.model.neededByWording
@@ -104,6 +110,10 @@ fun GroupDetailScreen(
     var showCreateChore by remember { mutableStateOf(false) }
     var showQuietHours by remember { mutableStateOf(false) }
     var showAway by remember { mutableStateOf(false) }
+    // Which history is open. The chore name is held alongside so the sheet has
+    // a title before its data arrives.
+    var historyChoreName by remember { mutableStateOf<String?>(null) }
+    var showGroupHistory by remember { mutableStateOf(false) }
 
     // Per-form submit state, so a create dialog can stay open until the write
     // lands and show a rejection where the user is already looking (B-7).
@@ -238,6 +248,15 @@ fun GroupDetailScreen(
                                 text = { Text("Create invite code") },
                                 leadingIcon = { Icon(Icons.Default.Link, null) },
                                 onClick = { showMenu = false; viewModel.generateInviteCode() },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("What's been done") },
+                                leadingIcon = { Icon(Icons.Default.List, null) },
+                                onClick = {
+                                    showMenu = false
+                                    showGroupHistory = true
+                                    viewModel.loadGroupHistory(state.historyWindow)
+                                },
                             )
                             DropdownMenuItem(
                                 text = { Text("Quiet hours") },
@@ -446,6 +465,11 @@ fun GroupDetailScreen(
                 detailOccurrenceId = null
                 editChoreId = occurrence.choreId
             },
+            onShowHistory = {
+                detailOccurrenceId = null
+                historyChoreName = occurrence.choreName
+                viewModel.loadChoreHistory(occurrence.choreId)
+            },
         )
     }
 
@@ -512,6 +536,25 @@ fun GroupDetailScreen(
                     if (failure == null) showCreateChore = false else choreError = failure
                 }
             },
+        )
+    }
+
+    historyChoreName?.let { name ->
+        ChoreHistorySheet(
+            choreName = name,
+            history = state.choreHistory,
+            loading = state.historyLoading,
+            onDismiss = { historyChoreName = null; viewModel.clearHistory() },
+        )
+    }
+
+    if (showGroupHistory) {
+        GroupHistorySheet(
+            history = state.groupHistory,
+            window = state.historyWindow,
+            loading = state.historyLoading,
+            onWindowChange = { viewModel.loadGroupHistory(it) },
+            onDismiss = { showGroupHistory = false; viewModel.clearHistory() },
         )
     }
 
@@ -1008,6 +1051,7 @@ private fun OccurrenceDetailSheet(
     myUserId: String?,
     onDismiss: () -> Unit,
     onEditChore: () -> Unit,
+    onShowHistory: () -> Unit,
     onPass: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -1061,10 +1105,16 @@ private fun OccurrenceDetailSheet(
                 // it being an agreement. A quiet text button, not a primary
                 // action: reading this sheet is the common case, editing the
                 // household's standards is not.
-                TextButton(
-                    onClick = onEditChore,
-                    contentPadding = PaddingValues(0.dp),
-                ) { Text("Edit chore") }
+                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    TextButton(
+                        onClick = onEditChore,
+                        contentPadding = PaddingValues(0.dp),
+                    ) { Text("Edit chore") }
+                    TextButton(
+                        onClick = onShowHistory,
+                        contentPadding = PaddingValues(0.dp),
+                    ) { Text("History") }
+                }
             }
 
             HorizontalDivider()
@@ -1853,6 +1903,209 @@ private fun RoleChip(role: String) {
 // ═══════════════════════════════════════════════════════════════
 // Dialogs
 // ═══════════════════════════════════════════════════════════════
+
+/**
+ * One chore's history (F6) — who did each cycle, when it was due, when it was
+ * done.
+ *
+ * Both dates are shown side by side and nothing is computed from them. A
+ * completion three days after its date simply reads "done Tue 8 Sep · was due
+ * Sat 5 Sep", and whether that matters is the reader's judgement. The moment
+ * the app renders "3 days late" it has taken a position, which is what the spec
+ * means by lateness being visible only as arithmetic.
+ *
+ * Absences are interleaved by date rather than listed separately, so a gap in
+ * someone's completions is visibly a gap in their being there — otherwise a
+ * quiet stretch reads as flaking, which is the misreading this view exists to
+ * prevent.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ChoreHistorySheet(
+    choreName: String,
+    history: ChoreHistory?,
+    loading: Boolean,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    // One list, newest first, of two kinds of thing.
+    val rows: List<Pair<OffsetDateTime, Any>> = remember(history) {
+        if (history == null) emptyList()
+        else (
+            history.entries.map { it.doneAt to (it as Any) } +
+                history.absences.map { it.startedAt to (it as Any) }
+            ).sortedByDescending { it.first }
+    }
+
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Text(
+                text = choreName,
+                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+            )
+            Text(
+                "Every time this has been done.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            HorizontalDivider()
+
+            when {
+                loading -> Text("Loading…", style = MaterialTheme.typography.bodyMedium)
+
+                rows.isEmpty() -> Text(
+                    "Nothing done yet. It'll show up here once someone ticks it off.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                else -> rows.forEach { (_, row) ->
+                    when (row) {
+                        is ChoreHistoryEntry -> Column(
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Text(
+                                text = buildString {
+                                    append("Done ")
+                                    append(formatDueDate(row.doneAt))
+                                    row.dueDate?.let { append(" · was due ${formatDueDate(it)}") }
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            Text(
+                                text = if (row.doneBy == row.assignedTo) {
+                                    "${row.doneByName}'s turn"
+                                } else {
+                                    // Named without comment. Who did it is the
+                                    // fact; what it says about anyone is not.
+                                    "${row.doneByName} did ${row.assigneeName}'s turn"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+
+                        is Absence -> Text(
+                            text = buildString {
+                                append("${row.username} away from ${formatDueDate(row.startedAt)}")
+                                row.finishedAt?.let { append(" to ${formatDueDate(it)}") }
+                                    ?: append(" — still away")
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            fontStyle = FontStyle.Italic,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The per-person view (F6): completions over a window.
+ *
+ * A count each, in the order people joined, with everyone listed — including
+ * anyone who has done nothing. Re-sorting by count, or hiding the zeroes, would
+ * build the leaderboard the whole feature is designed around not being. There
+ * are no totals, shares or averages for the same reason: the data is presented
+ * and the conclusions belong to the household.
+ *
+ * Days away sit beside the count so a quiet spell has its explanation attached
+ * rather than being left to speak for itself.
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+private fun GroupHistorySheet(
+    history: GroupHistory?,
+    window: String,
+    loading: Boolean,
+    onWindowChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Text(
+                text = "What's been done",
+                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+            )
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                listOf(
+                    "week" to "This week",
+                    "month" to "This month",
+                    "quarter" to "3 months",
+                ).forEach { (value, label) ->
+                    FilterChip(
+                        selected = window == value,
+                        onClick = { if (window != value) onWindowChange(value) },
+                        label = { Text(label) },
+                    )
+                }
+            }
+
+            HorizontalDivider()
+
+            if (loading || history == null) {
+                Text("Loading…", style = MaterialTheme.typography.bodyMedium)
+            } else {
+                history.people.forEach { person ->
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            text = person.username,
+                            style = MaterialTheme.typography.titleSmall.copy(
+                                fontWeight = FontWeight.Bold,
+                            ),
+                        )
+                        Text(
+                            text = when (person.completed) {
+                                0 -> "Nothing yet"
+                                1 -> "1 chore done"
+                                else -> "${person.completed} chores done"
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        if (person.awayDays > 0) {
+                            Text(
+                                text = if (person.awayDays == 1) "Away 1 day of this"
+                                else "Away ${person.awayDays} days of this",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontStyle = FontStyle.Italic,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+
+                Text(
+                    "Counted by who actually did it, so covering for someone counts for you.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
 
 /**
  * Away (F5) — "I'm not at the house".

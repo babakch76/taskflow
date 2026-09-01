@@ -6,7 +6,9 @@ import androidx.lifecycle.viewModelScope
 import com.taskflow.app.data.model.ActivityEvent
 import com.taskflow.app.data.model.BulkUpdateTaskStatusRequest
 import com.taskflow.app.data.model.Chore
+import com.taskflow.app.data.model.ChoreHistory
 import com.taskflow.app.data.model.CreateChoreRequest
+import com.taskflow.app.data.model.GroupHistory
 import com.taskflow.app.data.model.CreateTaskRequest
 import com.taskflow.app.data.model.GroupWithProgress
 import com.taskflow.app.data.model.InviteByUsernameRequest
@@ -60,6 +62,17 @@ data class GroupDetailUiState(
     /** The signed-in user's quiet-hours window (F3), for the settings dialog. */
     val quietFrom: String = "21:00",
     val quietTo: String = "09:00",
+    /**
+     * History (F6), fetched only when a history view is opened.
+     *
+     * Not part of the board load: it is read rarely, it is the feature the
+     * spec ranked last, and pulling it on every refresh would cost every user
+     * for the few who look.
+     */
+    val choreHistory: ChoreHistory? = null,
+    val groupHistory: GroupHistory? = null,
+    val historyWindow: String = "month",
+    val historyLoading: Boolean = false,
     val activity: List<ActivityEvent> = emptyList(),
     /** Fatal error for the whole screen — shows the retry state. */
     val error: String? = null,
@@ -418,6 +431,40 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
         runAction(successMessage = if (target == "done") "Marked done" else "Completion undone") {
             api.updateOccurrence(groupId, occurrence.id, UpdateOccurrenceRequest(status = target))
         }
+    }
+
+    // ─── History (F6) ───────────────────────────────────────────
+
+    /** One chore's timeline. Cleared first, so the sheet never shows another chore's. */
+    fun loadChoreHistory(choreId: String) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(choreHistory = null, historyLoading = true)
+            val history = runCatching { api.choreHistory(groupId, choreId) }
+                .getOrNull()?.takeIf { it.isSuccessful }?.body()
+            _uiState.value = _uiState.value.copy(
+                choreHistory = history,
+                historyLoading = false,
+                message = if (history == null) "Couldn't load this chore's history" else null,
+            )
+        }
+    }
+
+    /** The per-person view for a window: "week", "month" or "quarter". */
+    fun loadGroupHistory(window: String) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(historyWindow = window, historyLoading = true)
+            val history = runCatching { api.groupHistory(groupId, window) }
+                .getOrNull()?.takeIf { it.isSuccessful }?.body()
+            _uiState.value = _uiState.value.copy(
+                groupHistory = history,
+                historyLoading = false,
+                message = if (history == null) "Couldn't load history" else null,
+            )
+        }
+    }
+
+    fun clearHistory() {
+        _uiState.value = _uiState.value.copy(choreHistory = null, groupHistory = null)
     }
 
     /**

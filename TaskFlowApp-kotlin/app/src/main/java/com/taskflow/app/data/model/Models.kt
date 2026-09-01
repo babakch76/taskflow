@@ -197,6 +197,85 @@ data class Occurrence(
  */
 val Occurrence.isOpen: Boolean get() = status == "open"
 
+// ── History (F6) ─────────────────────────────────────────────────
+
+/**
+ * One completed cycle of a chore.
+ *
+ * Note the absence of any "late" field, on purpose. Both dates are here and the
+ * reader does the arithmetic — a flag would be a verdict the app had reached,
+ * which is what the spec rules out.
+ */
+data class ChoreHistoryEntry(
+    @SerializedName("occurrence_id")
+    val occurrenceId: String,
+    @SerializedName("assigned_to")
+    val assignedTo: String,
+    @SerializedName("assignee_name")
+    val assigneeName: String,
+    /** May differ from [assignedTo] — that is a cover, credited to the doer. */
+    @SerializedName("done_by")
+    val doneBy: String,
+    @SerializedName("done_by_name")
+    val doneByName: String,
+    @SerializedName("passed_from")
+    val passedFrom: String? = null,
+    @SerializedName("due_date")
+    val dueDate: OffsetDateTime? = null,
+    @SerializedName("done_at")
+    val doneAt: OffsetDateTime,
+)
+
+/** One away period, for showing beside a timeline or explaining a quiet spell. */
+data class Absence(
+    @SerializedName("user_id")
+    val userId: String,
+    val username: String,
+    @SerializedName("started_at")
+    val startedAt: OffsetDateTime,
+    @SerializedName("ends_at")
+    val endsAt: OffsetDateTime? = null,
+    @SerializedName("ended_at")
+    val endedAt: OffsetDateTime? = null,
+) {
+    /** When the absence actually finished, or null while it is still running. */
+    val finishedAt: OffsetDateTime?
+        get() = listOfNotNull(endedAt, endsAt).minOrNull()
+}
+
+data class ChoreHistory(
+    @SerializedName("chore_id")
+    val choreId: String,
+    val entries: List<ChoreHistoryEntry> = emptyList(),
+    val absences: List<Absence> = emptyList(),
+)
+
+/**
+ * One member's completions in a window.
+ *
+ * A count and days away, and nothing else — no share, no percentage, no rank.
+ */
+data class PersonHistory(
+    @SerializedName("user_id")
+    val userId: String,
+    val username: String,
+    val completed: Int = 0,
+    @SerializedName("away_days")
+    val awayDays: Int = 0,
+)
+
+/**
+ * The per-person view. [people] arrives in join order and is rendered in that
+ * order: re-sorting by [PersonHistory.completed] would build the leaderboard
+ * the server carefully declined to build.
+ */
+data class GroupHistory(
+    val window: String = "month",
+    val from: OffsetDateTime? = null,
+    val to: OffsetDateTime? = null,
+    val people: List<PersonHistory> = emptyList(),
+)
+
 /**
  * One entry in a group's audit trail, from GET /groups/{id}/activity.
  *

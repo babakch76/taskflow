@@ -167,6 +167,26 @@ interface GroupApiService {
         @Path("chore_id") choreId: String,
     ): Response<Unit>
 
+    // ─── History (F6), read-only ──────────────────────────────
+
+    /** One chore's completions, newest first, with the absences around them. */
+    @GET("groups/{group_id}/chores/{chore_id}/history")
+    suspend fun choreHistory(
+        @Path("group_id") groupId: String,
+        @Path("chore_id") choreId: String,
+    ): Response<ChoreHistory>
+
+    /**
+     * Completions per person over a window ("week", "month" or "quarter").
+     *
+     * Comes back in join order, with every member present. Do not re-sort it.
+     */
+    @GET("groups/{group_id}/history")
+    suspend fun groupHistory(
+        @Path("group_id") groupId: String,
+        @Query("window") window: String,
+    ): Response<GroupHistory>
+
     /** Everything the board shows: open occurrences first, oldest due date first. */
     @GET("groups/{group_id}/occurrences")
     suspend fun listOccurrences(@Path("group_id") groupId: String): Response<List<Occurrence>>

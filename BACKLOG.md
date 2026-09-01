@@ -68,7 +68,10 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
   Both **endpoints** are done: per chore, a timeline of completions with the
   due date and the done-at and deliberately no "late" flag; per person,
   completions in a window counted by `done_by`, in join order, with everyone
-  listed and days-away alongside. Still to come: the client screens.
+  listed and days-away alongside. The **client** has both: "History" on the
+  occurrence detail, and "What's been done" in the group's overflow menu.
+- **The spec's build order is complete** — F1 through F6. What remains is
+  deployment (see the handoff) and whatever the report needs.
 - Multi-select and bulk status were removed with F1. The backend endpoint
   survives, unused by the client.
 
