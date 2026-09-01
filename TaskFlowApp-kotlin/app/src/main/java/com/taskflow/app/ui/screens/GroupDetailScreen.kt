@@ -350,7 +350,15 @@ fun GroupDetailScreen(
                         modifier = Modifier.fillMaxSize(),
                     ) {
                     when (selectedTab) {
-                        0 -> TaskList(
+                        0 -> Column(modifier = Modifier.fillMaxSize()) {
+                        // Away is meant to be visible — it is the thing that
+                        // explains why the rotation is stepping over you. It
+                        // was only ever legible from the overflow menu you set
+                        // it from, so your own board said nothing about it.
+                        if (iAmAway) {
+                            AwayBanner(onBack = { viewModel.setAway(false, null) })
+                        }
+                        TaskList(
                             // Chore occurrences first: they are the model the
                             // app is moving to, and tasks are the legacy
                             // one-off shape still carried alongside them.
@@ -377,6 +385,7 @@ fun GroupDetailScreen(
                             },
                             onCreate = { showCreate = true },
                         )
+                        }
 
                         1 -> ActivityList(state.activity)
 
@@ -736,6 +745,43 @@ private sealed interface BoardRow {
         override val isOpen get() = occurrence.isOpen
         override val doneBy get() = occurrence.doneBy
         override val doneAt get() = occurrence.doneAt
+    }
+}
+
+/**
+ * "You're away" — shown on your own board, and only while you are.
+ *
+ * The spec makes away deliberately impossible to hide, but until now the only
+ * places it showed were the member list and the rotation pickers — that is,
+ * everywhere *except* the screen the away person is looking at. So your own
+ * absence was the one thing you could not see.
+ *
+ * Deliberately quiet: a surface tint, no icon, no colour that reads as a
+ * warning. Being away is not a failure state, and this is a reminder of a
+ * setting rather than a nag about one.
+ *
+ * "I'm back" is here because this is where you notice you are still marked
+ * away. Going away keeps its dialog in the overflow menu — that direction has
+ * a rule worth reading first; coming back has nothing to explain.
+ */
+@Composable
+private fun AwayBanner(onBack: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "You're away — chores are passing over you",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onBack) { Text("I'm back") }
+        }
     }
 }
 
