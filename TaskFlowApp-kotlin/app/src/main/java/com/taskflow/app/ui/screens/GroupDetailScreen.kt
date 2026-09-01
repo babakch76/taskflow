@@ -327,9 +327,16 @@ fun GroupDetailScreen(
                             Tab(
                                 selected = selectedTab == 0,
                                 onClick = { selectedTab = 0 },
-                                // Both halves of the board, or the count would
-                                // disagree with the number of rows below it.
-                                text = { Text("Board (${state.tasks.size + state.occurrences.size})") },
+                                // Open rows, both shapes. It used to count the
+                                // done ones too, so finishing a chore never
+                                // moved the number — and a row under Done is
+                                // not a thing on the board in the sense a
+                                // count next to a tab label implies.
+                                text = {
+                                    val open = state.tasks.count { it.isOpen } +
+                                        state.occurrences.count { it.isOpen }
+                                    Text("Board ($open)")
+                                },
                             )
                             Tab(
                                 selected = selectedTab == 1,
