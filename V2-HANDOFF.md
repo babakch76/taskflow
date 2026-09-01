@@ -185,8 +185,45 @@ What is left is not features:
    on `ui-cleanup`.
 3. **The report.** The non-goals in the spec's "considered and rejected" section
    are worth keeping, and several decisions here were deliberate departures
-   worth naming — the interval departure in section 2, and the reading of
-   constraint 5 that kept the calendar tab.
+   worth naming — the interval departure in section 2, and the known
+   simplifications immediately below.
+
+## 5a. Known simplifications — say these in the report
+
+None of these is a bug. Each is a delivery choice with a visible consequence,
+and a reader who finds one unmentioned will assume it was missed.
+
+**Reminders are device-local.** They are scheduled on the phone with
+AlarmManager — no Firebase, no push service, no server-side scheduler — because
+every rule the spec gives is "to the assignee, about their own chore", which a
+phone can decide alone, and because nothing about anyone's chores then leaves
+the device. The cost is real and worth stating plainly:
+
+- A busy pass notifies the receiver **when their device next syncs**, not
+  instantly. A turn that starts while the app is closed is noticed at the next
+  open.
+- Someone who never opens the app learns of a pass only from the board.
+- **Do not demo the pass flow on a device that has not reopened the app**, or
+  the notification will not have been armed yet and the demo will look broken
+  when it is behaving as designed.
+
+**The activity feed polls every 5 seconds** while the screen is resumed
+(`PollWhileResumed`, which stops on background). That is the deliberate
+stand-in for push. It is fine for a household and would not be fine for a
+product; say so rather than letting a reader assume a socket.
+
+**Fixed-date chores never trigger the 48-hour still-waiting nudge.**
+`rollForwardFixedDates` re-dates a lapsed fixed date the moment it passes, so
+such an occurrence is never open past its date long enough to owe one. Their
+pressure is the weekly DUE_SOON instead. This asymmetry is chosen: a fixed date
+belongs to the world — the bin lorry comes Tuesday — and nagging about a date
+that has already moved would be nagging about the wrong day. Both
+`rollForwardFixedDates` and `ReminderSchedule.stillWaitingFor` now carry a
+comment saying this, so the next reader of either finds the other.
+
+**There is no scheduler at all**, so the one other time-based behaviour —
+rolling a lapsed fixed date forward — happens when the board is read. From the
+board it is indistinguishable from one that rolled at midnight.
 
 ### The rules now in code — don't quietly undo them
 

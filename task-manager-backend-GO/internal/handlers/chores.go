@@ -676,6 +676,12 @@ func (h *ChoreHandler) UpdateOccurrence(w http.ResponseWriter, r *http.Request) 
 // this project, and a chore whose date rolls only when someone looks at the
 // board is indistinguishable — from the board — from one that rolled at
 // midnight. It is idempotent: a second call finds nothing past due.
+//
+// Chosen consequence: a fixed-date chore therefore never triggers the client's
+// 48-hour "still waiting" nudge, because this re-dates it the moment it lapses
+// and the nudge only fires on an occurrence that is open past its date. Their
+// pressure is the weekly DUE_SOON instead. See ReminderSchedule.stillWaitingFor
+// on the client, which carries the same note.
 func (h *ChoreHandler) rollForwardFixedDates(groupID string) error {
 	now := time.Now()
 

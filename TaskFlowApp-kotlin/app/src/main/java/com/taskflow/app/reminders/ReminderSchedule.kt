@@ -131,6 +131,14 @@ object ReminderSchedule {
      * change with time. An occurrence that has been open for a week gets the
      * same message it got on day one — the persistence is the point, and
      * escalation is what the spec is avoiding.
+     *
+     * **Fixed-date chores never reach this.** The backend's
+     * `rollForwardFixedDates` re-dates a lapsed fixed date the moment it
+     * passes, so such an occurrence is never open past its date for long enough
+     * to owe a nudge. Their pressure is the weekly DUE_SOON instead. That
+     * asymmetry is chosen, not missed: a fixed date belongs to the world (the
+     * bin lorry comes Tuesday), and nagging about a date that has already moved
+     * would be nagging about the wrong day.
      */
     fun stillWaitingFor(
         occurrenceId: String,
