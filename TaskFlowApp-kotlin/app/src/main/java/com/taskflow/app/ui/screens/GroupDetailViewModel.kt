@@ -14,6 +14,7 @@ import com.taskflow.app.data.model.MemberInfo
 import com.taskflow.app.data.model.Occurrence
 import com.taskflow.app.data.model.Patchable
 import com.taskflow.app.data.model.Task
+import com.taskflow.app.data.model.UpdateChoreRequest
 import com.taskflow.app.data.model.UpdateMeRequest
 import com.taskflow.app.data.model.UpdateOccurrenceRequest
 import com.taskflow.app.data.model.UpdateTaskRequest
@@ -448,6 +449,48 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
                 quietFrom = updated.quietFrom,
                 quietTo = updated.quietTo,
                 message = "Quiet hours updated",
+            )
+        }
+    }
+
+    /**
+     * Edit a chore — open to every member, by design.
+     *
+     * Only changed fields are sent: the backend rejects an empty patch, and
+     * restating a field you didn't touch would clobber a concurrent edit by
+     * someone else. It also phrases the group diff from what actually changed,
+     * so sending everything would announce changes nobody made.
+     *
+     * The schedule *type* is absent on purpose and cannot be changed here — a
+     * chore that switched category would leave its open occurrence holding a
+     * due date derived from rules that no longer apply.
+     */
+    fun updateChore(
+        choreId: String,
+        name: String?,
+        doneLine: String?,
+        intervalDays: Int?,
+        fixedWeekdays: List<Int>?,
+        rotation: List<String>?,
+        onResult: (String?) -> Unit = {},
+    ) {
+        if (name == null && doneLine == null && intervalDays == null &&
+            fixedWeekdays == null && rotation == null
+        ) {
+            onResult(null)
+            return
+        }
+        runAction(successMessage = "Chore updated", onResult = onResult) {
+            api.updateChore(
+                groupId,
+                choreId,
+                UpdateChoreRequest(
+                    name = name?.trim(),
+                    doneLine = doneLine?.trim(),
+                    intervalDays = intervalDays,
+                    fixedWeekdays = fixedWeekdays,
+                    rotation = rotation,
+                ),
             )
         }
     }
