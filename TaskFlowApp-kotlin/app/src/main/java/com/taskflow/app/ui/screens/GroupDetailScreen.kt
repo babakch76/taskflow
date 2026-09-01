@@ -52,8 +52,11 @@ import com.taskflow.app.TaskFlowApp
 import com.taskflow.app.reminders.QuietHours
 import com.taskflow.app.reminders.ReminderScheduler
 import com.taskflow.app.data.model.ActivityEvent
+import com.taskflow.app.data.model.Chore
 import com.taskflow.app.data.model.MemberInfo
 import com.taskflow.app.data.model.Occurrence
+import com.taskflow.app.data.model.neededByWording
+import com.taskflow.app.data.model.scheduleWording
 import com.taskflow.app.data.model.ScheduleType
 import com.taskflow.app.data.model.Task
 import com.taskflow.app.data.model.isOpen
@@ -116,6 +119,13 @@ fun GroupDetailScreen(
     // instead of the sheet showing the snapshot it opened with.
     var detailTaskId by remember { mutableStateOf<String?>(null) }
     val detailTask = detailTaskId?.let { id -> state.tasks.firstOrNull { it.id == id } }
+
+    // Same trick for occurrences: hold the id, re-derive the row, so the sheet
+    // follows a teammate completing it rather than showing a stale snapshot.
+    var detailOccurrenceId by remember { mutableStateOf<String?>(null) }
+    val detailOccurrence = detailOccurrenceId?.let { id ->
+        state.occurrences.firstOrNull { it.id == id }
+    }
 
     // Which member row is "me" — needed so the owner isn't offered a demote
     // button on their own row.
@@ -331,10 +341,11 @@ fun GroupDetailScreen(
                             members = state.members,
                             myUserId = myUserId,
                             onOpenDetail = { row ->
-                                // Only tasks have a detail sheet so far. The
-                                // occurrence sheet arrives with F4's done-line,
-                                // which is what there would be to show.
-                                if (row is BoardRow.TaskRow) detailTaskId = row.task.id
+                                when (row) {
+                                    is BoardRow.TaskRow -> detailTaskId = row.task.id
+                                    is BoardRow.OccurrenceRow ->
+                                        detailOccurrenceId = row.occurrence.id
+                                }
                             },
                             onToggleDone = { row ->
                                 when (row) {
@@ -394,6 +405,23 @@ fun GroupDetailScreen(
     LaunchedEffect(detailTaskId, state.tasks) {
         if (detailTaskId != null && state.tasks.none { it.id == detailTaskId }) {
             detailTaskId = null
+        }
+    }
+
+    detailOccurrence?.let { occurrence ->
+        OccurrenceDetailSheet(
+            occurrence = occurrence,
+            chore = state.chores.firstOrNull { it.id == occurrence.choreId },
+            members = state.members,
+            onDismiss = { detailOccurrenceId = null },
+        )
+    }
+    // An occurrence can vanish under the sheet: undoing a completion deletes
+    // the one it spawned. Close rather than leave a sheet describing a row that
+    // no longer exists.
+    LaunchedEffect(detailOccurrenceId, state.occurrences) {
+        if (detailOccurrenceId != null && state.occurrences.none { it.id == detailOccurrenceId }) {
+            detailOccurrenceId = null
         }
     }
 
@@ -888,6 +916,119 @@ private fun TaskCard(
  * reflects a teammate's concurrent change rather than a stale snapshot taken
  * when it opened.
  */
+/**
+ * Detail for one chore occurrence — where F4's "what done means" is finally
+ * read.
+ *
+ * The line is agreed once, at the chore, and shown on every occurrence of it.
+ * That is the whole mechanism: it moves the standards argument (what counts as
+ * "clean"? how often is often enough?) out of each individual turn and into a
+ * single setup conversation the household has once. So the done-line and the
+ * frequency sit together at the top, before anything about this particular
+ * cycle — they describe the agreement; the rest describes today.
+ *
+ * Read-only. Editing a chore is open to every member and broadcasts a diff to
+ * the group, which is a different affordance in a different place — this sheet
+ * is for the person about to do the chore, wondering what "done" means.
+ *
+ * Deliberately absent: anything about lateness. A past-due occurrence shows its
+ * date exactly as any other does. There is no "overdue" line, no day count and
+ * no colour beyond the same amber the board uses — constraint 3, and the detail
+ * view is precisely where a shame badge would feel most justified and do most
+ * damage.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun OccurrenceDetailSheet(
+    occurrence: Occurrence,
+    chore: Chore?,
+    members: List<MemberInfo>,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val assignee = members.firstOrNull { it.id == occurrence.assignedTo }?.username
+    val doer = members.firstOrNull { it.id == occurrence.doneBy }?.username
+
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text(
+                text = occurrence.choreName,
+                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+            )
+
+            // The agreement: what done means, and how often. Together, because
+            // apart they are only half of what was agreed.
+            val doneLine = occurrence.doneLine.trim()
+            if (doneLine.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("What done means", style = MaterialTheme.typography.labelLarge)
+                    Text(doneLine, style = MaterialTheme.typography.bodyLarge)
+                }
+            } else {
+                Text(
+                    "No agreed definition of done for this chore yet.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            chore?.let {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("How often", style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        buildString {
+                            append(it.scheduleWording().replaceFirstChar { c -> c.uppercase() })
+                            it.neededByWording()?.let { needed -> append(", $needed") }
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+
+            HorizontalDivider()
+
+            // This cycle.
+            DetailRow("Whose turn", assignee ?: "—")
+            DetailRow(
+                "Due",
+                occurrence.dueDate?.let { formatDueDate(it) }
+                    // As-needed chores genuinely have no date. Saying so beats
+                    // an empty field, which reads like missing data.
+                    ?: "No date — it waits until it's needed",
+            )
+
+            if (!occurrence.isOpen) {
+                DetailRow("Done by", doer ?: "—")
+                DetailRow("Done", formatStamp(occurrence.doneAt))
+                if (doer != null && assignee != null && doer != assignee) {
+                    // Stated plainly, without praise or blame either way. It is
+                    // simply how the next turn was decided.
+                    Text(
+                        "$doer covered this one, so the next turn goes back to $assignee.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DetailRow(label: String, value: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun TaskDetailSheet(

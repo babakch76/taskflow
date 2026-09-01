@@ -35,11 +35,15 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
   Quiet hours live on the user record so they survive a reinstall. Two reminders
   per occurrence to the assignee only, plus a flat 48-hourly nudge for anything
   still open. See B-8 for the one gap this delivery choice leaves.
-- **F4 (done-line + edit diffs) — NEXT**, and mostly already built: the done
-  line is stored, capped at 140, editable, and offered at chore creation, and
-  chore edits already broadcast a diff. What's missing is showing the line where
-  an occurrence is read. F5 (busy/away) is the larger remaining piece, and its
-  pass should reuse `nextTurn` rather than growing a second copy of the rule.
+- **F4 (done-line + edit diffs) — IN PROGRESS.** The occurrence detail sheet now
+  exists and shows the done-line beside the chore's frequency, which is where
+  the spec says the line must be read — it had been stored since F2 and never
+  displayed anywhere. Still to come: editing the done-line and schedule from the
+  client, which is open to every member and broadcasts a diff the backend
+  already produces.
+- **F5 (busy/away) — the larger remaining piece.** Its pass should reuse
+  `nextTurn` rather than growing a second copy of the rule; `resume_after`
+  already carries what the debt case needs.
 - Multi-select and bulk status were removed with F1. The backend endpoint
   survives, unused by the client.
 
