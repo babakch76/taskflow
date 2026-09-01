@@ -17,7 +17,6 @@ import com.taskflow.app.data.model.Patchable
 import com.taskflow.app.data.model.SetAwayRequest
 import com.taskflow.app.data.model.Task
 import com.taskflow.app.data.model.UpdateChoreRequest
-import com.taskflow.app.data.model.UpdateMeRequest
 import com.taskflow.app.data.model.UpdateOccurrenceRequest
 import com.taskflow.app.data.model.UpdateTaskRequest
 import com.taskflow.app.data.model.isOpen
@@ -504,39 +503,10 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
             ?.let { _uiState.value = _uiState.value.copy(members = it) }
     }
 
-    /**
-     * Move the quiet-hours window (F3).
-     *
-     * Not routed through [runAction]: that refreshes the board and reloads the
-     * activity feed, and this changes neither. The new window is folded into
-     * state directly, which is also what re-triggers rescheduling on the screen.
-     */
-    fun setQuietHours(from: String, to: String) {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isWorking = true, message = null)
-            val response = runCatching { api.updateMe(UpdateMeRequest(quietFrom = from, quietTo = to)) }
-                .getOrElse {
-                    _uiState.value = _uiState.value.copy(isWorking = false, message = networkMessage(it))
-                    return@launch
-                }
-
-            val updated = response.body()
-            if (!response.isSuccessful || updated == null) {
-                _uiState.value = _uiState.value.copy(
-                    isWorking = false,
-                    message = ApiErrors.messageFor(response),
-                )
-                return@launch
-            }
-
-            _uiState.value = _uiState.value.copy(
-                isWorking = false,
-                quietFrom = updated.quietFrom,
-                quietTo = updated.quietTo,
-                message = "Quiet hours updated",
-            )
-        }
-    }
+    // Quiet hours are *read* here — they gate this group's reminders — but no
+    // longer written here. They are one window per person, not per household,
+    // so the setting moved to the Dashboard (DashboardViewModel.setQuietHours)
+    // where every group is in view.
 
     /**
      * Edit a chore — open to every member, by design.

@@ -8,6 +8,7 @@ import com.taskflow.app.data.model.InviteActionRequest
 import com.taskflow.app.data.model.InviteInfo
 import com.taskflow.app.data.model.Occurrence
 import com.taskflow.app.data.model.RedeemInviteRequest
+import com.taskflow.app.data.model.UpdateMeRequest
 import com.taskflow.app.data.remote.ApiErrors
 import com.taskflow.app.data.remote.RetrofitClient
 import com.taskflow.app.reminders.QuietHours
@@ -144,6 +145,37 @@ class DashboardViewModel : ViewModel() {
 
     private val _quietHours = MutableStateFlow(QuietHours.DEFAULT)
     val quietHours: StateFlow<QuietHours> = _quietHours.asStateFlow()
+
+    /**
+     * Move the quiet-hours window (F3).
+     *
+     * It lives here, on the screen that lists every household, because it is a
+     * property of the *person*: one window, stored on the user record, applying
+     * to reminders from all of their groups. It used to sit in a single group's
+     * overflow menu, which said the opposite.
+     *
+     * Writing it here also re-arms every group's alarms in one step, since the
+     * screen reschedules whenever this flow changes.
+     */
+    fun setQuietHours(from: String, to: String) {
+        viewModelScope.launch {
+            _isWorking.value = true
+            try {
+                val response = api.updateMe(UpdateMeRequest(quietFrom = from, quietTo = to))
+                val updated = response.body()
+                if (response.isSuccessful && updated != null) {
+                    _quietHours.value = QuietHours.parse(updated.quietFrom, updated.quietTo)
+                    _actionMessage.value = "Quiet hours updated"
+                } else {
+                    _actionMessage.value = ApiErrors.messageFor(response)
+                }
+            } catch (e: Exception) {
+                _actionMessage.value = networkMessage(e)
+            } finally {
+                _isWorking.value = false
+            }
+        }
+    }
 
     /**
      * Fetches occurrences and chores for each group, in parallel.

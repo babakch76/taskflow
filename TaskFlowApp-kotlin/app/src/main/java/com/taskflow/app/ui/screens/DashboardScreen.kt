@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.MailOutline
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material.icons.outlined.FolderOff
@@ -76,6 +77,7 @@ fun DashboardScreen(
     var showCreateDialog by remember { mutableStateOf(false) }
     var showInvites by remember { mutableStateOf(false) }
     var showJoinByCode by remember { mutableStateOf(false) }
+    var showQuietHours by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
 
     val snackbarHostState = remember { SnackbarHostState() }
@@ -175,6 +177,14 @@ fun DashboardScreen(
                             leadingIcon = { Icon(Icons.Default.VpnKey, null) },
                             onClick = { showMenu = false; showJoinByCode = true },
                         )
+                        // A per-person setting, so it belongs on the per-person
+                        // screen. It used to live in one group's overflow menu,
+                        // which implied a window per household.
+                        DropdownMenuItem(
+                            text = { Text("Quiet hours") },
+                            leadingIcon = { Icon(Icons.Default.Notifications, null) },
+                            onClick = { showMenu = false; showQuietHours = true },
+                        )
                         HorizontalDivider()
                         DropdownMenuItem(
                             text = { Text("Sign out") },
@@ -269,7 +279,22 @@ fun DashboardScreen(
             },
         )
     }
+
+    if (showQuietHours) {
+        QuietHoursDialog(
+            from = quietHours.from.format(QUIET_HOURS_FORMAT),
+            to = quietHours.to.format(QUIET_HOURS_FORMAT),
+            onDismiss = { showQuietHours = false },
+            onSave = { from, to ->
+                showQuietHours = false
+                viewModel.setQuietHours(from, to)
+            },
+        )
+    }
 }
+
+/** The wire format for a quiet-hours bound, and what the dialog shows. */
+private val QUIET_HOURS_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 
 // ═══════════════════════════════════════════════════════════════
 // Sub-components
@@ -711,5 +736,88 @@ private fun CreateGroupDialog(
                 Text("Cancel")
             }
         },
+    )
+}
+
+/**
+ * Quiet hours (F3).
+ *
+ * The window when the app will not notify you. A reminder that would land
+ * inside it is held until the window opens, not dropped — which is worth saying
+ * on the dialog, because "quiet hours" could as easily mean "cancelled".
+ *
+ * The default wraps midnight, so the two fields are not a simple range and the
+ * copy avoids implying they are.
+ */
+@Composable
+private fun QuietHoursDialog(
+    from: String,
+    to: String,
+    onDismiss: () -> Unit,
+    onSave: (String, String) -> Unit,
+) {
+    var fromText by remember { mutableStateOf(from) }
+    var toText by remember { mutableStateOf(to) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    // "HH:MM", 24-hour. Kept deliberately strict so what the user types is
+    // exactly what the server stores.
+    fun valid(value: String): Boolean =
+        Regex("""^([01]\d|2[0-3]):([0-5]\d)$""").matches(value)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Quiet hours", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                AnimatedVisibility(visible = error != null) {
+                    Text(
+                        text = error ?: "",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Text(
+                    "Reminders won't arrive between these times. Anything due in that window waits until it's over — nothing is lost.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = fromText,
+                        onValueChange = { fromText = it.take(5); error = null },
+                        label = { Text("From") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedTextField(
+                        value = toText,
+                        onValueChange = { toText = it.take(5); error = null },
+                        label = { Text("Until") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Text(
+                    "24-hour, like 21:00.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                if (!valid(fromText) || !valid(toText)) {
+                    error = "Use 24-hour times, like 21:00"
+                    return@Button
+                }
+                if (fromText == toText) {
+                    error = "Start and end can't be the same time"
+                    return@Button
+                }
+                onSave(fromText, toText)
+            }) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
