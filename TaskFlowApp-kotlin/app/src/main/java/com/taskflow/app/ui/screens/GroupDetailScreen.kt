@@ -738,11 +738,38 @@ private fun TaskCard(
     onToggleDone: () -> Unit,
 ) {
     val overdue = isOverdue(row)
+
     // Undo is offered only to the person who ticked it, and only briefly.
     // Anything older is history, and history is not editable from the board.
-    val canUndo = !row.isOpen &&
-        row.doneBy != null && row.doneBy == myUserId &&
-        row.doneAt?.let { Duration.between(it, OffsetDateTime.now()) < UNDO_WINDOW } == true
+    //
+    // The permission half is a plain comparison. The *expiry* half cannot be:
+    // reading the clock during composition freezes the answer at whatever it
+    // was when the row was last drawn, so the checkbox stayed enabled well past
+    // ten minutes until something unrelated happened to recompose it (B-6).
+    //
+    // Instead the row waits out its own window. One coroutine per undoable row,
+    // sleeping exactly until the moment it lapses — no polling, and no clock
+    // read that can go stale.
+    val mineToUndo = !row.isOpen && row.doneBy != null && row.doneBy == myUserId
+    var windowOpen by remember(row.key, row.doneAt) { mutableStateOf(false) }
+
+    LaunchedEffect(row.key, row.doneAt, mineToUndo) {
+        val doneAt = row.doneAt
+        if (!mineToUndo || doneAt == null) {
+            windowOpen = false
+            return@LaunchedEffect
+        }
+        val remaining = Duration.between(OffsetDateTime.now(), doneAt.plus(UNDO_WINDOW))
+        if (remaining.isNegative || remaining.isZero) {
+            windowOpen = false
+            return@LaunchedEffect
+        }
+        windowOpen = true
+        delay(remaining.toMillis())
+        windowOpen = false
+    }
+
+    val canUndo = mineToUndo && windowOpen
 
     ElevatedCard(
         modifier = Modifier

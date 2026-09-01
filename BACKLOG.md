@@ -92,7 +92,18 @@ in-dialog on failure. The in-dialog error slot already exists.
 
 ---
 
-### B-6 · The undo window doesn't close on its own — OPEN
+### B-6 · The undo window doesn't close on its own — DONE (2026-09-01)
+
+**Fixed:** each undoable row now waits out its own window in a `LaunchedEffect`
+that sleeps exactly until the moment it lapses, then closes it. No clock read
+during composition, so nothing can go stale, and no polling either — one
+coroutine per undoable row, and only while there is one.
+
+Verified by temporarily shortening the window to 20 seconds, ticking a row, and
+watching the checkbox go from enabled to disabled with no taps, no scrolling and
+no refresh. The original 10 minutes was restored afterwards.
+
+Original report follows.
 
 **Reported:** 2026-08-31, while device-verifying F1.
 
