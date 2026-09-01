@@ -72,6 +72,27 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
   occurrence detail, and "What's been done" in the group's overflow menu.
 - **The spec's build order is complete** — F1 through F6. What remains is
   deployment (see the handoff) and whatever the report needs.
+- **One create button, one form — DONE** (2026-09-01, UI cleanup phase 2). The
+  board had two FABs, a primary one for chores and a small one for one-off
+  tasks, which made the household choose a storage model before it could write
+  anything down. There is now one "Add chore" button and one dialog, whose
+  shared fields (name, done-line) are followed by a single question — **"Does
+  this repeat?"**, *One time* / *Repeats* — and the answer decides the rest of
+  the form. *One time* offers an assignee (defaulting to the creator) and an
+  optional date and submits through the **task** path; *Repeats* offers the
+  schedule and rotation and submits through the **chore** path. No endpoint
+  changed, and `createTask` grew only a `dueDate` argument it already had a
+  request field for.
+  The one-off branch deliberately has no "Nobody" chip: the spec assigns
+  everything, always (constraint 8). See B-12 for the leftover on the detail
+  sheet.
+  Device-verified: a one-off created through the merged form landed on the
+  board with the chosen person and date (`POST /tasks`, 201); a fortnightly
+  chore landed with its first occurrence (`POST /chores`, 201); with the
+  backend killed the dialog stayed open with the name, interval and rotation
+  intact and "Network error: Failed to connect to /10.0.2.2:8080" in its own
+  error slot (B-7 not regressed), and pressing Create again once the server was
+  back submitted the same form successfully.
 - Multi-select and bulk status were removed with F1, and the backend endpoint
   behind them is **now gone too** — nothing had called it since, and the
   ViewModel wrapper was unreachable from any screen. The
@@ -81,6 +102,24 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
 ---
 
 ## Bugs
+
+### B-12 · A task can still be un-assigned from the detail sheet — OPEN
+
+**Reported:** 2026-09-01, noticed while merging the create dialogs (phase 2).
+
+The merged create form has no "Nobody" option, because constraint 8 makes
+assignment unconditional — busy and away are the only exits from an assigned
+chore, and an unassigned one is the arrangement the spec exists to replace.
+`TaskDetailSheet` still offers a **Nobody** chip under "Assigned to", so a task
+that cannot be created unowned can still be made unowned a moment later, and it
+then sits in the board's *Others* section belonging to no one.
+
+Small, and left alone deliberately: phase 2 was a merge of two dialogs and
+changing the detail sheet is a different concern. **Fix:** drop the chip, and
+decide what the sheet should do with the legacy tasks that already have a null
+`assigned_to` (show them as unassigned, but don't offer it as a choice).
+
+---
 
 ### B-10 · The board still wears a completion percentage — OPEN
 

@@ -224,6 +224,7 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
         title: String,
         description: String,
         assignedTo: String?,
+        dueDate: String? = null,
         onResult: (String?) -> Unit = {},
     ) {
         runAction(successMessage = "Task added", onResult = onResult) {
@@ -233,6 +234,7 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
                     title = title.trim(),
                     description = description.trim(),
                     assignedTo = assignedTo,
+                    dueDate = dueDate,
                 ),
             )
         }
