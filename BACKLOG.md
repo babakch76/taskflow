@@ -123,6 +123,86 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
 
 ## Bugs
 
+### B-13 · A fixed-date chore done early came back due the same day — DONE (2026-09-02)
+
+**Reported by Babak**, 2026-09-02: a repeating chore completed before its due
+date "stays on the same date" instead of following its pattern.
+
+**Confirmed, and it was real on the fixed-date path.** A "Fridays" chore due
+Fri 4 Sep, completed on Wed 2 Sep, spawned its next occurrence **also due Fri 4
+Sep**. Put the bins out early and the chore reappears for the same collection,
+so it has to be done twice — and a household that is habitually early never
+advances the schedule at all.
+
+**Cause:** `nextDueDate` passed the *completion time* to `nextFixedDate`, which
+returns the soonest matching weekday strictly after it. Completing on Wednesday
+made "the soonest Friday after Wednesday" the very Friday just dealt with.
+
+**Fix:** the fixed-date scan now starts from the later of the completion and
+the completed occurrence's own due date — the calendar slot just satisfied.
+Both ends matter and neither anchor works alone: anchoring only to the due date
+would put a chore finally done three weeks late onto a Friday that has already
+gone. The due date is converted into the completion's location first, because
+times come back from SQLite in UTC (the DSN sets no `_loc`) and a weekday read
+in the wrong zone is a weekday off by one either side of midnight.
+
+Two regression tests, `TestFixedDateDoneEarlyMovesToTheNextSlot` and
+`TestFixedDateDoneLateLandsOnAFutureSlot`. The first was checked against the
+unfixed code and fails there with exactly the reported symptom. Verified
+end-to-end too: same chore, same early completion, now spawns Fri **11** Sep.
+
+**The interval path was not changed** — see B-14, which is a question rather
+than a defect.
+
+---
+
+### B-14 · Should an interval chore done early pull its schedule earlier? — OPEN, needs a decision
+
+**Raised** alongside B-13, from the same report. Not a bug against the spec, so
+it was left alone rather than changed quietly.
+
+An interval chore's next date is counted from the **completion**:
+`spec_2` line 43 — *"next occurrence is due N days after the last completion"* —
+and the create dialog says so out loud ("Counted from the last time it was
+done"). So an every-3-days chore done on Wednesday is next due Saturday, and
+doing it early pulls the whole schedule earlier, exactly as doing it late
+pushes it later.
+
+What makes it *look* broken is the first cycle: a new chore's first occurrence
+is due `created + N`, so creating an every-3-days chore and ticking it off the
+same day produces a next date of `created + 3` — the same date the completed
+one had. Nothing moved, apparently. It is a coincidence of completing exactly N
+days early, not a stuck schedule.
+
+**The question:** is completion-anchoring right for early completions, or
+should the rhythm hold (done early → still due on the original date + N)? The
+spec only ever justifies the rule with a *late* example. Completion-anchoring
+is defensible — the bathroom is dirty three days after it was cleaned, not
+three days after it was meant to be — but a household that tidies up two days
+early every time will find "every 3 days" quietly drifting into every other
+day. Changing it means changing the spec's stated rule and the copy in the
+create dialog, so it needs Babak's call.
+
+---
+
+### B-15 · Chore-history ordering has no tiebreaker, and the test is flaky — OPEN
+
+**Found** 2026-09-02 while running the full suite for B-13.
+`TestChoreHistoryRecordsWhoActuallyDidIt` failed once in four runs and passes in
+isolation, so it is timing, not the change under test.
+
+`ChoreHistory` orders by `o.done_at DESC` alone (`history.go:70`). Two
+completions of the same chore close enough together share a stored `done_at`,
+and SQLite is then free to return them in either order — which is what the test
+trips over, and what a real household would see as a timeline that shuffles
+between refreshes.
+
+**Fix:** add a deterministic tiebreaker, e.g. `ORDER BY o.done_at DESC,
+o.created_at DESC`. One line, no change to what the history means — it ranks
+nothing either way.
+
+---
+
 ### B-12 · A task can still be un-assigned from the detail sheet — OPEN
 
 **Reported:** 2026-09-01, noticed while merging the create dialogs (phase 2).
@@ -378,6 +458,37 @@ settle:
 ---
 
 ## Missing features
+
+### F-2 · No way to delete a chore from the app — OPEN
+
+**Asked by Babak**, 2026-09-02: "why is there no option to delete a chore?"
+
+Because the UI was never wired up. Everything else exists:
+
+- `DELETE /groups/{group_id}/chores/{chore_id}` is routed
+  (`cmd/server/main.go:93`) and works — verified against the local backend,
+  returns 204 and takes the chore's occurrences with it.
+- `GroupApiService.deleteChore` exists (`GroupApiService.kt:154`).
+- `GroupDetailViewModel.deleteChore` exists (`GroupDetailViewModel.kt:553`),
+  with a "Chore deleted" message ready.
+
+Nothing calls the ViewModel method. It has been unreachable since F2. Tasks got
+a delete button on `TaskDetailSheet` back in v1 and chores never got the
+equivalent, so the one-off shape is deletable and the chore shape is not.
+
+**Fix:** a "Delete chore" action on `EditChoreDialog` — that is already the
+"this chore is wrong" screen and is open to every member, so delete belongs
+beside edit rather than on the occurrence sheet, where it would read as
+deleting *this cycle*. Behind a confirm, like task delete: deleting a chore
+removes its whole history, which is not something to do on one tap.
+
+Worth settling at the same time: whether a member may delete a chore anyone
+created. Everything else about chores is open to every member by design
+(F2/F4), so the consistent answer is yes — but it is the most destructive thing
+in the app, and it is the first place that question really bites since the
+manager role was removed.
+
+---
 
 ### F-1 · No group settings; description can't be edited after creation — OPEN
 

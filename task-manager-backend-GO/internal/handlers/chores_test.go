@@ -532,6 +532,93 @@ func TestIntervalCountsFromTheCompletionNotTheOldDueDate(t *testing.T) {
 	}
 }
 
+// Doing a fixed-date chore early must move it to the *next* slot, not leave it
+// on the one just satisfied.
+//
+// The regression: nextDueDate scanned forward from the moment of completion, so
+// putting the bins out on Wednesday for a "Fridays" chore found the soonest
+// Friday after Wednesday — the very Friday just dealt with. The chore came
+// straight back, due the same day, and had to be done twice.
+func TestFixedDateDoneEarlyMovesToTheNextSlot(t *testing.T) {
+	db := newTestDB(t)
+	owner := newUser(t, db, "owner")
+	groupID := newGroup(t, db, owner, "Flat")
+
+	// A weekday two days out, so completing "now" is unambiguously early.
+	target := time.Now().AddDate(0, 0, 2)
+	chore := createChore(t, db, groupID, owner, fmt.Sprintf(`{
+		"name": "Bins", "schedule_type": "fixed_date", "fixed_weekdays": [%d],
+		"rotation": [%q]
+	}`, int(target.Weekday()), owner))
+
+	open := openOccurrencesFor(t, db, groupID, owner, chore.ID)[0]
+	if open.DueDate == nil {
+		t.Fatal("the first occurrence has no due date")
+	}
+	firstDue := open.DueDate.In(time.Local)
+
+	patchOccurrence(t, db, groupID, open.ID, owner, "done")
+
+	next := openOccurrencesFor(t, db, groupID, owner, chore.ID)[0]
+	if next.DueDate == nil {
+		t.Fatal("no due date on the spawned occurrence")
+	}
+	nextDue := next.DueDate.In(time.Local)
+
+	if nextDue.YearDay() == firstDue.YearDay() && nextDue.Year() == firstDue.Year() {
+		t.Fatalf("done early and the chore came back due the same day (%s) — it must move to the next slot",
+			nextDue.Format(time.RFC3339))
+	}
+	if !nextDue.After(firstDue) {
+		t.Errorf("next due %s is not after the slot just completed (%s)",
+			nextDue.Format(time.RFC3339), firstDue.Format(time.RFC3339))
+	}
+	if nextDue.Weekday() != target.Weekday() {
+		t.Errorf("next due is a %s; the schedule says %s", nextDue.Weekday(), target.Weekday())
+	}
+	// A week on, since a weekday recurs weekly.
+	if days := nextDue.YearDay() - firstDue.YearDay(); days != 7 {
+		t.Errorf("next due is %d days after the completed slot, want 7", days)
+	}
+}
+
+// The late case still has to work: a fixed-date chore finally done long after
+// its slot lands on the next slot from *now*, never on one already gone.
+func TestFixedDateDoneLateLandsOnAFutureSlot(t *testing.T) {
+	db := newTestDB(t)
+	owner := newUser(t, db, "owner")
+	groupID := newGroup(t, db, owner, "Flat")
+
+	target := time.Now().AddDate(0, 0, 2)
+	chore := createChore(t, db, groupID, owner, fmt.Sprintf(`{
+		"name": "Bins", "schedule_type": "fixed_date", "fixed_weekdays": [%d],
+		"rotation": [%q]
+	}`, int(target.Weekday()), owner))
+
+	open := openOccurrencesFor(t, db, groupID, owner, chore.ID)[0]
+
+	// Its slot was three weeks ago and nobody did it.
+	stale := time.Now().AddDate(0, 0, -19)
+	if _, err := db.Exec(`UPDATE occurrences SET due_date = ? WHERE id = ?`, stale.UTC(), open.ID); err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+
+	patchOccurrence(t, db, groupID, open.ID, owner, "done")
+
+	next := openOccurrencesFor(t, db, groupID, owner, chore.ID)[0]
+	if next.DueDate == nil {
+		t.Fatal("no due date on the spawned occurrence")
+	}
+	if !next.DueDate.After(time.Now()) {
+		t.Errorf("next due %s is in the past — a late completion must land on a future slot",
+			next.DueDate.Format(time.RFC3339))
+	}
+	if next.DueDate.In(time.Local).Weekday() != target.Weekday() {
+		t.Errorf("next due is a %s; the schedule says %s",
+			next.DueDate.In(time.Local).Weekday(), target.Weekday())
+	}
+}
+
 // An as-needed chore keeps exactly one standing occurrence: completing it
 // advances the turn and spawns the next, with no date attached.
 func TestAsNeededKeepsOneStandingOccurrence(t *testing.T) {

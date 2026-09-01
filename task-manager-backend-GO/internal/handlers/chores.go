@@ -874,7 +874,7 @@ func spawnNext(
 		GroupID:     chore.GroupID,
 		AssignedTo:  assignee,
 		Status:      models.OccurrenceOpen,
-		DueDate:     nextDueDate(chore, completedAt),
+		DueDate:     nextDueDate(chore, completed, completedAt),
 		SpawnedFrom: &completed.ID,
 		ResumeAfter: resumeAfter,
 	}
@@ -1023,7 +1023,19 @@ func (h *ChoreHandler) awayMembers(groupID string) (map[string]bool, error) {
 //
 // Fixed-date chores take the next date off the calendar, because the world sets
 // those. As-needed chores have no date at all.
-func nextDueDate(chore *models.Chore, completedAt time.Time) *time.Time {
+//
+// The fixed-date scan starts from **the slot just satisfied, or now, whichever
+// is later** — not simply from the completion. Starting from the completion is
+// wrong whenever a chore is done early: put the bins out on Wednesday for a
+// "Fridays" chore and the soonest Friday after Wednesday is the very Friday you
+// just dealt with, so the chore reappears due the same day and has to be done
+// twice. Anchoring to the completed occurrence's own due date moves it to the
+// following Friday, which is what "Fridays" means.
+//
+// Taking the later of the two keeps the late case right as well: a Friday chore
+// finally done a fortnight on must land on the *next* Friday, not on one that
+// has already gone. Both ends matter, so neither anchor works alone.
+func nextDueDate(chore *models.Chore, completed *models.Occurrence, completedAt time.Time) *time.Time {
 	switch chore.ScheduleType {
 	case models.ScheduleInterval:
 		if chore.IntervalDays == nil {
@@ -1032,7 +1044,17 @@ func nextDueDate(chore *models.Chore, completedAt time.Time) *time.Time {
 		due := atClockTime(completedAt.AddDate(0, 0, *chore.IntervalDays), chore.NeededByTime)
 		return &due
 	case models.ScheduleFixedDate:
-		return nextFixedDate(chore.FixedWeekdays, chore.FixedMonthDays, chore.NeededByTime, completedAt)
+		from := completedAt
+		if completed != nil && completed.DueDate != nil {
+			// Into the completion's location first: times come back from
+			// SQLite in UTC (the DSN sets no _loc), and a weekday read in the
+			// wrong zone is a weekday off by one either side of midnight.
+			slot := completed.DueDate.In(completedAt.Location())
+			if slot.After(from) {
+				from = slot
+			}
+		}
+		return nextFixedDate(chore.FixedWeekdays, chore.FixedMonthDays, chore.NeededByTime, from)
 	default:
 		return nil
 	}
