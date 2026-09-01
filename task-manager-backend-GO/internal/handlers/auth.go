@@ -43,6 +43,11 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		Email:        req.Email,
 		PasswordHash: hash,
 		CreatedAt:    time.Now(),
+		// Mirrors the column defaults the INSERT below relies on, so the
+		// response describes the row that was actually written rather than
+		// reporting an empty quiet-hours window.
+		QuietFrom: models.DefaultQuietFrom,
+		QuietTo:   models.DefaultQuietTo,
 	}
 
 	_, err = h.DB.Exec(
@@ -73,9 +78,11 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	var user models.User
 	err := h.DB.QueryRow(
-		`SELECT id, username, email, password_hash, created_at FROM users WHERE email = ?`,
+		`SELECT id, username, email, password_hash, created_at, quiet_from, quiet_to
+		 FROM users WHERE email = ?`,
 		req.Email,
-	).Scan(&user.ID, &user.Username, &user.Email, &user.PasswordHash, &user.CreatedAt)
+	).Scan(&user.ID, &user.Username, &user.Email, &user.PasswordHash, &user.CreatedAt,
+		&user.QuietFrom, &user.QuietTo)
 	if err != nil {
 		jsonError(w, "invalid email or password", http.StatusUnauthorized)
 		return

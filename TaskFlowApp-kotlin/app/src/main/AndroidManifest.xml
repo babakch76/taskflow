@@ -3,6 +3,24 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!--
+      F3. Reminders are scheduled on the device, so no push service and no
+      network permission beyond the one above.
+
+      POST_NOTIFICATIONS is runtime-requested on Android 13+; refusing it stops
+      reminders and nothing else, since the board never depended on them.
+      RECEIVE_BOOT_COMPLETED exists only to re-arm alarms, which the system
+      drops on reboot — without it, restarting the phone silently cancels every
+      reminder and the failure looks identical to nothing happening.
+
+      Note there is no SCHEDULE_EXACT_ALARM: reminders are armed with
+      setAndAllowWhileIdle, which needs no permission. A reminder arriving a few
+      minutes late is fine — it has already been shifted out of quiet hours, so
+      the minute was never the point.
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <application
         android:name=".TaskFlowApp"
         android:allowBackup="true"
@@ -22,6 +40,21 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Fires one reminder. Not exported: only our own alarms reach it. -->
+        <receiver
+            android:name=".reminders.ReminderReceiver"
+            android:exported="false" />
+
+        <!-- Re-arms stored alarms after a reboot. Must be exported to receive
+             the system broadcast. -->
+        <receiver
+            android:name=".reminders.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

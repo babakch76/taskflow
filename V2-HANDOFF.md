@@ -69,12 +69,45 @@ checkbox now means "done", and one control can't have two meanings. The bulk
 endpoint still exists server-side and is still tested; the client no longer
 calls it. Decide at F2 whether to delete it.
 
-### Not verified
+**F1 is now device-verified** (2026-08-31), against a locally-run backend. All
+of it: the three sections, single-group auto-open and its Back behaviour,
+one-tap completion by a non-assignee with `done_by` recorded, undo restricted to
+the doer, and amber-not-red overdue. One defect came out of it — see B-6.
 
-**F1 was never run on a device.** The emulator was closed. `done_by`/`done_at`
-is covered by Go tests; the board layout, the undo window, and the auto-open
-navigation are compile-and-test only. **Verify these first in the next
-session.**
+**F2 is done**, in three commits on `v2-chores`, each device-verified:
+
+| Commit | What |
+|---|---|
+| `995df3e` + `89ce790` | The chore/occurrence model, CRUD, board reads it |
+| `ceb0da7` | Interval chores take any number of days |
+| `91d93a0` | Completion spawns the next occurrence |
+| `40fcbae` | The unified turn rule |
+
+Chores and occurrences are **new tables alongside `tasks`**, which is untouched;
+existing tasks are the spec's one-off type already. The board shows both shapes
+through one `BoardRow`. The migration was run against a populated database to
+confirm it adds tables without disturbing what is there.
+
+**F3 to F6 are done too**, on the same branch and to the same pattern: backend
+first with tests, then the client, each step driven on the emulator before
+being committed. Section 5 lists what each one landed. Two of them started by
+correcting something behind them rather than adding a view —
+F6 turned away from a flag into a record, because history has to be able to say
+someone was absent *then*, not just now.
+
+**One deliberate departure from the spec.** It enumerates interval periods as
+1-6 days, weekly and monthly. That set has no entry for a fortnightly bin
+collection, so an interval is now any number of days from 1 to 365. Nothing
+downstream depended on the fixed set — the due date is arithmetic either way.
+Say so in the report rather than letting a reader find it.
+
+**Deliveries that differ from a literal reading, both worth stating in the
+report:** reminders are scheduled on the device rather than pushed from a
+server, because the spec's rules are all "to the assignee, about their own
+chore", which a phone can decide alone — the cost is that a turn starting while
+the app is closed is noticed at the next sync. And no scheduler exists at all,
+so the one other time-based behaviour (rolling a missed fixed date forward)
+happens when the board is read.
 
 ---
 
@@ -87,17 +120,29 @@ session.**
 | Branching | F1 went to `main`. **F2 and everything after goes on a `v2-chores` integration branch**, so `main` keeps a working demo and installable APK. |
 | Board placement | Replaced the Tasks tab in place, not a new tab. |
 | Navigation | One group → straight to its board; several → the list. |
-| `in_progress` | Kept for now; it disappears with the chore model at F2. |
+| `in_progress` | Still on `tasks`. It never reached the chore model — occurrences are `open`/`done` only — and it now only survives on legacy tasks. |
+| Fate of `tasks` | **Answered:** chores/occurrences sit alongside it. Existing tasks stay as one-offs. Nothing migrated, nothing lost. |
+| F2 slicing | **Answered:** three commits — model+CRUD+board, spawning, turn rule. Done. |
+| Interval periods | Any number of days, 1-365, not the spec's enumerated set. See the departure note above. |
+| The bulk endpoint | **Deleted** once the build order finished. It had been unreachable from the UI since F1 and nothing had claimed it in the meantime. The activity constant and its rendering stay, for rows already written. |
 
 ---
 
 ## 4. Blocked, needs Babak
 
-1. **The AWS server is two deploys behind.** It still runs the binary with the
-   deadline 403 and without `done_by`/`done_at`. SSH is refused because
-   `taskflow-sg`'s SSH rule is pinned to an IP that no longer matches.
+1. **The AWS server is now well behind — the whole of F1 and F2.** It still runs
+   the binary with the deadline 403, without `done_by`/`done_at`, and without
+   the chore model at all. SSH is refused because `taskflow-sg`'s SSH rule is
+   pinned to an IP that no longer matches.
    **Fix:** AWS console → EC2 → Security Groups → `taskflow-sg` → Inbound rules
-   → Edit → SSH → source **My IP**.
+   → Edit → SSH → source **My IP**. Check what the console reports as your
+   address rather than trusting a number written down earlier.
+
+   Nothing is blocked by this: everything since F1 has been verified against a
+   backend run locally, with `taskflow.baseUrl` commented out of
+   `local.properties` so the build falls back to `http://10.0.2.2:8080/`.
+   `migrate()` runs on every start and has been exercised against a populated
+   database, so the deploy itself should be uneventful.
 2. **After deploying**, demote the leftover admin row:
    `UPDATE group_members SET role='member' WHERE role='admin';`
    Cosmetic only — the role grants nothing now — but the chip still reads
@@ -105,38 +150,50 @@ session.**
 
 ---
 
-## 5. Next step: F2
+## 5. Next step: deployment, not features
 
-The spec's build order, item 2. This is the first thing that cannot be built on
-existing endpoints. Two questions were asked and **not answered** — settle them
-before writing code:
+**The spec's build order is complete.** F1 through F6 are built, tested and
+device-verified, on `v2-chores`:
 
-**(a) What happens to the `tasks` table and its data?**
-- New `chores` + `occurrences` tables alongside `tasks`, existing tasks become
-  the spec's "one-off" type (it already defines one). Nothing lost, `main`
-  keeps working. Most code, least risk.
-- Or migrate tasks into occurrences and drop `tasks` — cleaner end state, but
-  irreversible and has to be right first time against the live database.
-- Or abandon existing tasks and wipe the demo data.
+| | |
+|---|---|
+| F1 | The board — Yours / Others / Done, one-tap completion by anyone, 10-minute undo |
+| F2 | Chores, occurrences, four schedule types, spawning, the unified turn rule |
+| F3 | Reminders scheduled on the device, quiet hours on the user record |
+| F4 | The done-line shown and editable, with the edit diff broadcast |
+| F5 | Busy pass and away, both reusing the turn rule |
+| F6 | History — per chore and per person, ranking nothing |
 
-**(b) How to slice F2?** It is large: four schedule types, rotation, the
-unified turn rule, occurrence spawning. Suggested three commits on
-`v2-chores`, each building and tested: model + CRUD + board reads them →
-schedule types and spawning on completion → the unified turn rule with the
-debt case.
+What is left is not features:
 
-### The two rules in F2 most easily got wrong
+1. **Deploy.** See section 4 — AWS is behind everything since F1, and the
+   security group still blocks SSH. `migrate()` has been exercised against a
+   populated database at every step, including two backfills, so the deploy
+   itself should be uneventful.
+2. **Merge `v2-chores` into `main`**, once the deployed build is confirmed.
+   `main` still holds the pre-v2 demo deliberately.
+3. **The report.** The non-goals in the spec's "considered and rejected" section
+   are worth keeping, and several decisions here were deliberate departures
+   worth naming — the interval departure in section 2, and the reading of
+   constraint 5 that kept the calendar tab.
 
-- **Rotation advances on completion, never on the calendar.** An undone chore
-  stays with the same person; interval chores just sit there with a past due
-  date, fixed-date chores roll to the next date with the *same* assignee.
-- **The unified turn rule.** An occurrence completed by anyone other than its
-  assignee — or passed via busy (F5) — *counts as the doer's turn*: the next
-  occurrence goes back to the original assignee, and rotation continues after
-  the doer. One rule covers busy passes, voluntary covers, and the overflowing
-  bin. Nobody's patience can be waited out.
+### The rules now in code — don't quietly undo them
 
----
+- **Rotation advances on completion, never on the calendar.** Interval chores
+  sit with a past due date; fixed-date chores roll to the next date with the
+  *same* assignee (`rollForwardFixedDates`, which only ever writes due_date).
+- **The unified turn rule** (`nextTurn`) covers three things with one rule:
+  a voluntary cover, a busy pass, and the overflowing bin. `passed_from` is what
+  lets a pass reuse it; `resume_after` is what makes the rotation resume after
+  the coverer rather than the repayer.
+- **Away is not a debt.** It never cancels a turn already owed, and it is a
+  record (`away_periods`) rather than a flag, because F6 has to be able to say
+  someone was absent *then*.
+- **There is no `missed` state**, and the schema refuses one. Overdue is a
+  rendering decision.
+- **History ranks nothing.** People come back in join order with the zeroes
+  included, and lateness is two dates rather than a flag. Both are tested, and
+  both are the kind of thing a later "improvement" would quietly break.
 
 ## 6. Environment — things that cost hours if you don't know them
 

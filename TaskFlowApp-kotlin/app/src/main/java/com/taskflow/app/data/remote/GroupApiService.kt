@@ -16,6 +16,16 @@ import retrofit2.http.*
  */
 interface GroupApiService {
 
+    // ─── The signed-in user ───────────────────────────────────
+
+    /** The caller's own account, including their quiet-hours window (F3). */
+    @GET("me")
+    suspend fun getMe(): Response<User>
+
+    /** Move either end of the quiet-hours window. */
+    @PATCH("me")
+    suspend fun updateMe(@Body request: UpdateMeRequest): Response<User>
+
     // ─── Groups ───────────────────────────────────────────────
 
     @POST("groups")
@@ -108,19 +118,102 @@ interface GroupApiService {
         @Body request: UpdateTaskRequest,
     ): Response<Task>
 
-    /**
-     * Apply one status to several tasks in a single transaction.
-     * Every id must belong to [groupId] or the whole call fails with 404.
-     */
-    @PATCH("groups/{group_id}/tasks")
-    suspend fun bulkUpdateTaskStatus(
-        @Path("group_id") groupId: String,
-        @Body request: BulkUpdateTaskStatusRequest,
-    ): Response<List<Task>>
-
     @DELETE("groups/{group_id}/tasks/{task_id}")
     suspend fun deleteTask(
         @Path("group_id") groupId: String,
         @Path("task_id") taskId: String,
+    ): Response<Unit>
+
+    // ─── Chores and occurrences (F2) ──────────────────────────
+
+    /**
+     * Define a chore. The backend also creates its first occurrence, assigned
+     * to position 0 of the rotation, so the chore appears on the board at once.
+     */
+    @POST("groups/{group_id}/chores")
+    suspend fun createChore(
+        @Path("group_id") groupId: String,
+        @Body request: CreateChoreRequest,
+    ): Response<Chore>
+
+    /** The chore *definitions* and their rotation lists. The board reads occurrences instead. */
+    @GET("groups/{group_id}/chores")
+    suspend fun listChores(@Path("group_id") groupId: String): Response<List<Chore>>
+
+    /**
+     * Edit a chore. Open to every member by design; the whole group sees a diff
+     * of what changed in the activity feed.
+     */
+    @PATCH("groups/{group_id}/chores/{chore_id}")
+    suspend fun updateChore(
+        @Path("group_id") groupId: String,
+        @Path("chore_id") choreId: String,
+        @Body request: UpdateChoreRequest,
+    ): Response<Chore>
+
+    @DELETE("groups/{group_id}/chores/{chore_id}")
+    suspend fun deleteChore(
+        @Path("group_id") groupId: String,
+        @Path("chore_id") choreId: String,
+    ): Response<Unit>
+
+    // ─── History (F6), read-only ──────────────────────────────
+
+    /** One chore's completions, newest first, with the absences around them. */
+    @GET("groups/{group_id}/chores/{chore_id}/history")
+    suspend fun choreHistory(
+        @Path("group_id") groupId: String,
+        @Path("chore_id") choreId: String,
+    ): Response<ChoreHistory>
+
+    /**
+     * Completions per person over a window ("week", "month" or "quarter").
+     *
+     * Comes back in join order, with every member present. Do not re-sort it.
+     */
+    @GET("groups/{group_id}/history")
+    suspend fun groupHistory(
+        @Path("group_id") groupId: String,
+        @Query("window") window: String,
+    ): Response<GroupHistory>
+
+    /** Everything the board shows: open occurrences first, oldest due date first. */
+    @GET("groups/{group_id}/occurrences")
+    suspend fun listOccurrences(@Path("group_id") groupId: String): Response<List<Occurrence>>
+
+    /**
+     * Mark an occurrence done, or undo that.
+     *
+     * Any member may complete any occurrence. Undo is refused with 403 unless
+     * the caller is the person who marked it and is inside the ten-minute
+     * window — the client greys the control out on the same rule, but the
+     * server is what enforces it.
+     */
+    @PATCH("groups/{group_id}/occurrences/{occurrence_id}")
+    suspend fun updateOccurrence(
+        @Path("group_id") groupId: String,
+        @Path("occurrence_id") occurrenceId: String,
+        @Body request: UpdateOccurrenceRequest,
+    ): Response<Occurrence>
+
+    /**
+     * Busy — pass an open occurrence of yours to the next person in the
+     * rotation (F5).
+     *
+     * The turn comes back to you next cycle: passing defers it, it never
+     * deletes it. Refused with 403 if it isn't yours and 409 if there is nobody
+     * available to take it.
+     */
+    @POST("groups/{group_id}/occurrences/{occurrence_id}/pass")
+    suspend fun passOccurrence(
+        @Path("group_id") groupId: String,
+        @Path("occurrence_id") occurrenceId: String,
+    ): Response<Occurrence>
+
+    /** Declare yourself away from this household, or back (F5). */
+    @PUT("groups/{group_id}/members/me/away")
+    suspend fun setAway(
+        @Path("group_id") groupId: String,
+        @Body request: SetAwayRequest,
     ): Response<Unit>
 }

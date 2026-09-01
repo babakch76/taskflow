@@ -14,17 +14,186 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
 
 - **Manager role + deadline permissions — REMOVED.** The spec makes chore
   editing open to every member, so the gate contradicted it.
-- **F1 (Board) — DONE**, not yet device-verified. Yours/Others/Done sections,
-  `done_by`/`done_at` persisted, one-tap completion with a 10-minute undo,
-  amber overdue, single-group users land on the board.
-- **F2 (chores, rotation, spawning) — NEXT.** Two open questions in the
-  handoff; goes on a `v2-chores` branch.
-- Multi-select and bulk status were removed with F1. The backend endpoint
-  survives, unused by the client.
+- **F1 (Board) — DONE and device-verified** (2026-08-31). Driven on the emulator
+  against a local backend: the three sections, single-group auto-open and its
+  Back behaviour, one-tap completion by a non-assignee with `done_by` recorded,
+  undo restricted to the doer (another member's completed row is greyed and
+  sends no request), and amber — not red — overdue. See B-6 for the one defect
+  this turned up.
+- **F2 (chores, rotation, spawning) — DONE** on `v2-chores`, in three commits.
+  Both open questions were settled first: chores/occurrences are **new tables
+  alongside `tasks`** (existing tasks stay as the spec's one-off type). What
+  landed: the chore/occurrence model with CRUD and the board reading it;
+  completion spawning the next occurrence, interval dates counted from the
+  completion, and a missed fixed date rolling forward with the same assignee;
+  and the unified turn rule — a cover counts as the doer's turn, the chore goes
+  back to whoever owed it, and the rotation resumes after the coverer.
+  Device-verified at each step.
+- **F3 (reminders + quiet hours) — DONE**, in three commits. Reminders are
+  scheduled **on the device** with AlarmManager — no Firebase, no push service,
+  no server-side scheduler, and nothing about anyone's chores leaves the phone.
+  Quiet hours live on the user record so they survive a reinstall. Two reminders
+  per occurrence to the assignee only, plus a flat 48-hourly nudge for anything
+  still open. See B-8 for the one gap this delivery choice leaves.
+- **F4 (done-line + edit diffs) — DONE**, in two commits. The occurrence detail
+  sheet shows the done-line beside the chore's frequency (it had been stored
+  since F2 and displayed nowhere), and "Edit chore" on that sheet lets any
+  member change the name, done-line, schedule parameters and rotation. Only
+  changed fields are sent, and the group sees the diff the backend already
+  produced — the spec's own example, "weekly → every 3 days", now reachable
+  from the UI. The schedule *type* stays immutable.
+- **F5 (busy/away) — IN PROGRESS.** The busy pass is done server-side:
+  `POST /occurrences/{id}/pass` hands the chore to the next person in the
+  rotation, refreshes an already-overdue date to tomorrow, and keeps the debt
+  with the passer via `passed_from`. It reuses `nextTurn` rather than growing a
+  second rule — whoever ends up doing a passed chore is doing it for the passer,
+  which is exactly a voluntary cover. No activity event is written: the spec
+  gives a pass one private notification to the receiver and no group broadcast.
+  **Away** is done server-side too: `PUT /groups/{id}/members/me/away`, per
+  household, open-ended or dated. Rotation assignment steps over away members
+  and they re-enter at the same position on return — no bookkeeping needed,
+  since the order never changes. An expired period needs no cleanup. Away is
+  *not* a debt: it never cancels a turn already owed. `ListMembers` reports it,
+  because the spec makes away deliberately impossible to hide.
+  The **client** has both now: "Busy — pass it on" on an open occurrence of
+  yours, and an away toggle in the group's overflow menu whose dialog states the
+  rule the app cannot enforce and points at busy as the alternative. Away shows
+  on the member list and beside names in every rotation picker.
+- **F6 (history) — IN PROGRESS**, the last feature in the build order. It began
+  with a correction rather than a view: away was stored as a *current flag*, so
+  a past absence was unrecoverable — and the per-person view counts completions
+  over a window, where an unexplained dip reads as exactly the flaking the spec
+  forbids. Away is now an `away_periods` record, closed rather than erased on
+  return, with a one-time backfill so upgrading doesn't silently un-away anyone.
+  Both **endpoints** are done: per chore, a timeline of completions with the
+  due date and the done-at and deliberately no "late" flag; per person,
+  completions in a window counted by `done_by`, in join order, with everyone
+  listed and days-away alongside. The **client** has both: "History" on the
+  occurrence detail, and "What's been done" in the group's overflow menu.
+- **The spec's build order is complete** — F1 through F6. What remains is
+  deployment (see the handoff) and whatever the report needs.
+- Multi-select and bulk status were removed with F1, and the backend endpoint
+  behind them is **now gone too** — nothing had called it since, and the
+  ViewModel wrapper was unreachable from any screen. The
+  `tasks_bulk_updated` activity constant and the client's rendering of it stay,
+  because rows written before the removal still carry it.
 
 ---
 
 ## Bugs
+
+### B-8 · Reminders only cover the group whose board you last opened — DONE (2026-09-01)
+
+**Fixed:** the Dashboard now loads occurrences and chores for every group and
+arms reminders for all of them. It is the one screen that sees them all.
+
+The part that needed care: `reschedule` replaced the *whole* stored set, which
+was fine while only the board called it. With two callers, whichever ran last
+would have cancelled the other's alarms — a worse bug than the one being fixed,
+and a silent one. Reminders are now stored and replaced **per group**, so the
+board (one group) and the Dashboard (all of them) can both call in.
+
+Failures while loading are deliberately silent: this drives reminders, not the
+screen, and a group whose board could not be fetched keeps whatever alarms it
+already had rather than raising a banner over a group list that loaded fine.
+
+Verified with demo in two households: the Dashboard armed 2 reminders for one
+and 6 for the other, "Your turn: Water the plants" fired for the group whose
+board had never been opened, and opening one board left the other group's six
+untouched.
+
+Original report follows.
+
+**Reported:** 2026-09-01, while building F3.
+
+Reminders are scheduled on the device from the board's data, and the board is
+per-group. `GroupDetailScreen` is the only thing that calls
+`ReminderScheduler.reschedule`, so a user in two households gets reminders for
+whichever board they opened most recently, and the other group's turns pass
+unmentioned.
+
+**Not a problem for the common case.** The spec's household is one group, and a
+user in exactly one group lands straight on its board at login — so their
+reminders are always current. This only bites the multi-group user.
+
+**Fix:** schedule from somewhere that sees every group. The Dashboard already
+lists them, so it could fetch occurrences per group and hand the union to the
+scheduler — N requests where N is the number of households, which is 1 or 2 in
+practice. The scheduler itself needs no change: it is keyed by occurrence and
+replaces its whole set each time, so feeding it more occurrences is enough.
+
+---
+
+### B-7 · A rejected create closes the dialog and loses what you typed — DONE (2026-09-01)
+
+**Fixed:** both create dialogs now stay open until the write actually lands.
+`runAction` takes an optional result callback; the screen closes the dialog on
+success and, on failure, shows the message in the dialog's own error slot with
+every field still filled. Create reads "Creating…" and is disabled while the
+request is in flight, and Cancel is disabled with it so the form cannot be
+dismissed out from under a pending write. A failure routed to a form no longer
+also raises a snackbar — one message, where the user is looking.
+
+Verified by filling the chore form, killing the backend, and pressing Create:
+the dialog stayed up with "Network error: Failed to connect to /10.0.2.2:8080"
+and the name, schedule and rotation all intact. Restarting the server and
+pressing Create again submitted the same form successfully.
+
+Original report follows.
+
+**Reported:** 2026-08-31, hit while testing chore creation against a stale
+server binary.
+
+Both `CreateTaskDialog` and `CreateChoreDialog` set `showCreate… = false` and
+*then* fire the request, so a 400 from the backend surfaces as a snackbar over
+an empty board — the dialog is already gone, and every field the user filled in
+goes with it. On the chore form that is a name, a done-line, a schedule and a
+rotation order.
+
+Client-side validation now catches the common cases before the request (so this
+is rarer than it was), but anything only the server can know — a name that
+collides, a member who left the group mid-edit, a dropped connection — still
+loses the whole form.
+
+**Fix:** keep the dialog open until the call succeeds. That means the dialog
+needs to see `isWorking`/`message` rather than being dismissed optimistically:
+disable Create while in flight, close on success, show the server's message
+in-dialog on failure. The in-dialog error slot already exists.
+
+---
+
+### B-6 · The undo window doesn't close on its own — DONE (2026-09-01)
+
+**Fixed:** each undoable row now waits out its own window in a `LaunchedEffect`
+that sleeps exactly until the moment it lapses, then closes it. No clock read
+during composition, so nothing can go stale, and no polling either — one
+coroutine per undoable row, and only while there is one.
+
+Verified by temporarily shortening the window to 20 seconds, ticking a row, and
+watching the checkbox go from enabled to disabled with no taps, no scrolling and
+no refresh. The original 10 minutes was restored afterwards.
+
+Original report follows.
+
+**Reported:** 2026-08-31, while device-verifying F1.
+
+`canUndo` in `GroupDetailScreen.kt` (~line 600) calls `OffsetDateTime.now()`
+during composition, with nothing to trigger a recomposition when the ten
+minutes elapse. The checkbox therefore stays enabled past the window until
+something else recomposes the row — a poll, a refresh, or leaving and coming
+back.
+
+**Not a permissions hole.** The `doneBy == myUserId` half is correct, and since
+F2 the *server* enforces both halves (403 "the undo window has passed"), so a
+stale screen produces a clear error rather than a silent rewrite. What's wrong
+is only that the control looks available when it isn't.
+
+**Fix:** drive it from a ticker rather than from composition — a `produceState`
+that re-evaluates once a minute while a done row is on screen, or recompute
+against a clock the ViewModel already updates. Cheap either way; it was left
+alone so F1's verification pass didn't turn into a refactor.
+
+---
 
 ### B-1 · Invite list can't scroll past ~6 entries — DONE (round 1)
 

@@ -29,11 +29,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.ui.platform.LocalContext
+import com.taskflow.app.TaskFlowApp
 import com.taskflow.app.data.model.CreateGroupRequest
 import com.taskflow.app.data.model.Group
 import com.taskflow.app.data.model.InviteInfo
 import com.taskflow.app.data.remote.ApiErrors
 import com.taskflow.app.data.remote.RetrofitClient
+import com.taskflow.app.reminders.ReminderScheduler
 import kotlinx.coroutines.launch
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
@@ -84,6 +87,32 @@ fun DashboardScreen(
         autoOpenGroupId?.let { id ->
             viewModel.consumeAutoOpen()
             onGroupClick(id)
+        }
+    }
+
+    // Arm reminders for every group the user is in (F3, B-8).
+    //
+    // The board can only ever schedule for the group it is showing, so a second
+    // household's turns went unmentioned until you opened it. This is the one
+    // screen that sees them all. Scheduling is scoped per group, so this and
+    // the board can both call in without cancelling each other's alarms.
+    val reminderData by viewModel.reminderData.collectAsState()
+    val quietHours by viewModel.quietHours.collectAsState()
+    val context = LocalContext.current
+    val myUserId = remember {
+        (context.applicationContext as? TaskFlowApp)?.tokenManager?.getUserId()
+    }
+
+    LaunchedEffect(reminderData, quietHours, myUserId) {
+        reminderData.forEach { group ->
+            ReminderScheduler.reschedule(
+                context = context.applicationContext,
+                groupId = group.groupId,
+                occurrences = group.occurrences,
+                chores = group.chores,
+                myUserId = myUserId,
+                quiet = quietHours,
+            )
         }
     }
 

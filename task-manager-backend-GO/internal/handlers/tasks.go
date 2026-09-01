@@ -3,10 +3,8 @@ package handlers
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 
@@ -284,127 +282,6 @@ func (h *TaskHandler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, task)
 }
 
-// BulkUpdateTaskStatus handles PATCH /groups/{group_id}/tasks — one status
-// applied to many tasks, backing the multi-select UI.
-//
-// Every id is verified to belong to this group before anything is written, so a
-// member of group A cannot move group B's tasks by guessing ids. The whole set
-// moves or none of it does.
-func (h *TaskHandler) BulkUpdateTaskStatus(w http.ResponseWriter, r *http.Request) {
-	groupID := r.PathValue("group_id")
-	userID := middleware.GetUserID(r)
-
-	var req models.BulkUpdateTaskStatusRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonError(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-	if len(req.TaskIDs) == 0 {
-		jsonError(w, "task_ids must contain at least one task", http.StatusBadRequest)
-		return
-	}
-	if !validTaskStatuses[req.Status] {
-		jsonError(w, "status must be todo, in_progress, or done", http.StatusBadRequest)
-		return
-	}
-
-	// De-duplicate so a repeated id can't inflate the count check below.
-	ids := dedupe(req.TaskIDs)
-
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
-	idArgs := make([]any, 0, len(ids))
-	for _, id := range ids {
-		idArgs = append(idArgs, id)
-	}
-
-	tx, err := h.DB.Begin()
-	if err != nil {
-		jsonError(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	defer tx.Rollback()
-
-	// Count how many of the requested ids actually live in this group. Anything
-	// less than the full set means at least one id is missing or belongs to
-	// another group — 404, consistent with the single-task handlers and with
-	// the siloing rule that outsiders learn nothing about other groups.
-	var found int
-	if err := tx.QueryRow(
-		`SELECT COUNT(*) FROM tasks WHERE group_id = ? AND id IN (`+placeholders+`)`,
-		append([]any{groupID}, idArgs...)...,
-	).Scan(&found); err != nil {
-		jsonError(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	if found != len(ids) {
-		jsonError(w, "one or more tasks not found in this group", http.StatusNotFound)
-		return
-	}
-
-	// Same done_by/done_at invariant as the single-task path.
-	var doneSet string
-	updateArgs := []any{req.Status}
-	if req.Status == "done" {
-		doneSet = ", done_by = ?, done_at = CURRENT_TIMESTAMP"
-		updateArgs = append(updateArgs, userID)
-	} else {
-		doneSet = ", done_by = NULL, done_at = NULL"
-	}
-	updateArgs = append(updateArgs, idArgs...)
-	if _, err := tx.Exec(
-		`UPDATE tasks SET status = ?`+doneSet+`, updated_at = CURRENT_TIMESTAMP WHERE id IN (`+placeholders+`)`,
-		updateArgs...,
-	); err != nil {
-		jsonError(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	// One summary event, not one per task — the activity feed should read
-	// "moved 5 tasks to done", not scroll past five near-identical lines.
-	detail := fmt.Sprintf("%d task(s) → %s", len(ids), req.Status)
-	if err := recordActivity(tx, groupID, userID, EventTasksBulkUpdated, nil, detail); err != nil {
-		jsonError(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	// Read the updated rows inside the transaction so the response can never
-	// reflect a concurrent write that lands between the UPDATE and the commit.
-	rows, err := tx.Query(
-		`SELECT `+taskColumns+` FROM tasks WHERE id IN (`+placeholders+`) ORDER BY created_at DESC`,
-		idArgs...,
-	)
-	if err != nil {
-		jsonError(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	tasks := []models.Task{}
-	for rows.Next() {
-		var t models.Task
-		if err := scanTask(rows, &t); err != nil {
-			rows.Close()
-			log.Printf("BulkUpdateTaskStatus: scan failed for group %s: %v", groupID, err)
-			jsonError(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		tasks = append(tasks, t)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		log.Printf("BulkUpdateTaskStatus: rows error for group %s: %v", groupID, err)
-		jsonError(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	rows.Close()
-
-	if err := tx.Commit(); err != nil {
-		jsonError(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	jsonResponse(w, http.StatusOK, tasks)
-}
-
 func (h *TaskHandler) DeleteTask(w http.ResponseWriter, r *http.Request) {
 	groupID := r.PathValue("group_id")
 	taskID := r.PathValue("task_id")
@@ -431,20 +308,4 @@ func (h *TaskHandler) DeleteTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// dedupe returns the input with duplicates removed, in sorted order for a
-// stable query shape.
-func dedupe(in []string) []string {
-	seen := make(map[string]bool, len(in))
-	out := make([]string, 0, len(in))
-	for _, v := range in {
-		if seen[v] {
-			continue
-		}
-		seen[v] = true
-		out = append(out, v)
-	}
-	sort.Strings(out)
-	return out
 }

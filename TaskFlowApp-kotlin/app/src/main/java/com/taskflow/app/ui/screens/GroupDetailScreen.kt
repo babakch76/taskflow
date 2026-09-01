@@ -39,9 +39,32 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.core.content.ContextCompat
 import com.taskflow.app.TaskFlowApp
+import com.taskflow.app.reminders.QuietHours
+import com.taskflow.app.reminders.ReminderScheduler
 import com.taskflow.app.data.model.ActivityEvent
+import com.taskflow.app.data.model.Absence
+import com.taskflow.app.data.model.Chore
+import com.taskflow.app.data.model.ChoreHistory
+import com.taskflow.app.data.model.ChoreHistoryEntry
+import com.taskflow.app.data.model.GroupHistory
 import com.taskflow.app.data.model.MemberInfo
+import com.taskflow.app.data.model.Occurrence
+import com.taskflow.app.data.model.neededByWording
+import com.taskflow.app.data.model.scheduleWording
+import com.taskflow.app.data.model.ScheduleType
 import com.taskflow.app.data.model.Task
 import com.taskflow.app.data.model.isOpen
 import kotlinx.coroutines.delay
@@ -84,6 +107,20 @@ fun GroupDetailScreen(
 
     var selectedTab by remember { mutableIntStateOf(0) }
     var showCreateTask by remember { mutableStateOf(false) }
+    var showCreateChore by remember { mutableStateOf(false) }
+    var showQuietHours by remember { mutableStateOf(false) }
+    var showAway by remember { mutableStateOf(false) }
+    // Which history is open. The chore name is held alongside so the sheet has
+    // a title before its data arrives.
+    var historyChoreName by remember { mutableStateOf<String?>(null) }
+    var showGroupHistory by remember { mutableStateOf(false) }
+
+    // Per-form submit state, so a create dialog can stay open until the write
+    // lands and show a rejection where the user is already looking (B-7).
+    var taskSubmitting by remember { mutableStateOf(false) }
+    var taskError by remember { mutableStateOf<String?>(null) }
+    var choreSubmitting by remember { mutableStateOf(false) }
+    var choreError by remember { mutableStateOf<String?>(null) }
     var showInvite by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
     var confirmLeave by remember { mutableStateOf(false) }
@@ -95,12 +132,27 @@ fun GroupDetailScreen(
     var detailTaskId by remember { mutableStateOf<String?>(null) }
     val detailTask = detailTaskId?.let { id -> state.tasks.firstOrNull { it.id == id } }
 
+    // Same trick for occurrences: hold the id, re-derive the row, so the sheet
+    // follows a teammate completing it rather than showing a stale snapshot.
+    var detailOccurrenceId by remember { mutableStateOf<String?>(null) }
+    val detailOccurrence = detailOccurrenceId?.let { id ->
+        state.occurrences.firstOrNull { it.id == id }
+    }
+
+    // Same pattern for the chore being edited: hold the id, re-derive the chore,
+    // so a concurrent edit by someone else is reflected rather than overwritten
+    // from a stale snapshot.
+    var editChoreId by remember { mutableStateOf<String?>(null) }
+    val editChore = editChoreId?.let { id -> state.chores.firstOrNull { it.id == id } }
+
     // Which member row is "me" — needed so the owner isn't offered a demote
     // button on their own row.
     val context = LocalContext.current
     val myUserId = remember {
         (context.applicationContext as? TaskFlowApp)?.tokenManager?.getUserId()
     }
+
+    val iAmAway = state.members.firstOrNull { it.id == myUserId }?.away == true
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -114,6 +166,38 @@ fun GroupDetailScreen(
     // Leaving may have deleted the group, so get off this screen.
     LaunchedEffect(state.hasLeft) {
         if (state.hasLeft) onBack()
+    }
+
+    // F3 — ask once for permission to notify. Refusing costs only reminders:
+    // the board has never depended on them, so there is nothing to explain and
+    // nothing to re-ask for.
+    val notificationPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { /* granted or not, the app works the same */ }
+
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(
+                context, Manifest.permission.POST_NOTIFICATIONS,
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    // Re-arm reminders whenever the board or the quiet window changes.
+    //
+    // Rescheduling is a full replacement and skips anything already delivered,
+    // so running it on every board change is safe and keeps the alarms in step
+    // with a rotation that may have moved while we were away.
+    LaunchedEffect(state.occurrences, state.chores, state.quietFrom, state.quietTo, myUserId) {
+        ReminderScheduler.reschedule(
+            context = context.applicationContext,
+            groupId = groupId,
+            occurrences = state.occurrences,
+            chores = state.chores,
+            myUserId = myUserId,
+            quiet = QuietHours.parse(state.quietFrom, state.quietTo),
+        )
     }
 
     LaunchedEffect(state.message) {
@@ -165,6 +249,31 @@ fun GroupDetailScreen(
                                 leadingIcon = { Icon(Icons.Default.Link, null) },
                                 onClick = { showMenu = false; viewModel.generateInviteCode() },
                             )
+                            DropdownMenuItem(
+                                text = { Text("What's been done") },
+                                leadingIcon = { Icon(Icons.Default.List, null) },
+                                onClick = {
+                                    showMenu = false
+                                    showGroupHistory = true
+                                    viewModel.loadGroupHistory(state.historyWindow)
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Quiet hours") },
+                                leadingIcon = { Icon(Icons.Default.Notifications, null) },
+                                onClick = { showMenu = false; showQuietHours = true },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(if (iAmAway) "I'm back" else "I'm away") },
+                                leadingIcon = { Icon(Icons.Default.DateRange, null) },
+                                onClick = {
+                                    showMenu = false
+                                    // Coming back needs no explaining; going
+                                    // away does, so only that direction gets a
+                                    // dialog.
+                                    if (iAmAway) viewModel.setAway(false, null) else showAway = true
+                                },
+                            )
                             HorizontalDivider()
                             DropdownMenuItem(
                                 text = { Text("Leave group") },
@@ -180,13 +289,27 @@ fun GroupDetailScreen(
         },
         floatingActionButton = {
             if (selectedTab == 0 && state.group != null) {
-                ExtendedFloatingActionButton(
-                    onClick = { showCreateTask = true },
-                    icon = { Icon(Icons.Default.Add, contentDescription = null) },
-                    text = { Text("New Task") },
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                )
+                // A chore is the app's main subject now, so it gets the primary
+                // action; one-off tasks keep a smaller button beside it.
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    SmallFloatingActionButton(
+                        onClick = { showCreateTask = true },
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = "New one-off task")
+                    }
+                    ExtendedFloatingActionButton(
+                        onClick = { showCreateChore = true },
+                        icon = { Icon(Icons.Default.Add, contentDescription = null) },
+                        text = { Text("New Chore") },
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                    )
+                }
             }
         },
     ) { padding ->
@@ -221,7 +344,9 @@ fun GroupDetailScreen(
                             Tab(
                                 selected = selectedTab == 0,
                                 onClick = { selectedTab = 0 },
-                                text = { Text("Tasks (${state.tasks.size})") },
+                                // Both halves of the board, or the count would
+                                // disagree with the number of rows below it.
+                                text = { Text("Board (${state.tasks.size + state.occurrences.size})") },
                             )
                             Tab(
                                 selected = selectedTab == 1,
@@ -248,17 +373,31 @@ fun GroupDetailScreen(
                     ) {
                     when (selectedTab) {
                         0 -> TaskList(
-                            tasks = state.tasks,
+                            // Chore occurrences first: they are the model the
+                            // app is moving to, and tasks are the legacy
+                            // one-off shape still carried alongside them.
+                            rows = state.occurrences.map { BoardRow.OccurrenceRow(it) } +
+                                state.tasks.map { BoardRow.TaskRow(it) },
                             members = state.members,
                             myUserId = myUserId,
-                            onOpenDetail = { detailTaskId = it.id },
-                            onToggleDone = { task ->
-                                viewModel.setTaskStatus(
-                                    task.id,
-                                    if (task.isOpen) "done" else "todo",
-                                )
+                            onOpenDetail = { row ->
+                                when (row) {
+                                    is BoardRow.TaskRow -> detailTaskId = row.task.id
+                                    is BoardRow.OccurrenceRow ->
+                                        detailOccurrenceId = row.occurrence.id
+                                }
                             },
-                            onCreate = { showCreateTask = true },
+                            onToggleDone = { row ->
+                                when (row) {
+                                    is BoardRow.TaskRow -> viewModel.setTaskStatus(
+                                        row.task.id,
+                                        if (row.isOpen) "done" else "todo",
+                                    )
+                                    is BoardRow.OccurrenceRow ->
+                                        viewModel.toggleOccurrenceDone(row.occurrence)
+                                }
+                            },
+                            onCreate = { showCreateChore = true },
                         )
 
                         1 -> CalendarTab(
@@ -309,13 +448,134 @@ fun GroupDetailScreen(
         }
     }
 
+    detailOccurrence?.let { occurrence ->
+        OccurrenceDetailSheet(
+            occurrence = occurrence,
+            chore = state.chores.firstOrNull { it.id == occurrence.choreId },
+            members = state.members,
+            myUserId = myUserId,
+            onDismiss = { detailOccurrenceId = null },
+            onPass = {
+                detailOccurrenceId = null
+                viewModel.passOccurrence(occurrence)
+            },
+            onEditChore = {
+                // Close the sheet first: an AlertDialog over a bottom sheet
+                // stacks two surfaces and the sheet's scrim fights the dialog's.
+                detailOccurrenceId = null
+                editChoreId = occurrence.choreId
+            },
+            onShowHistory = {
+                detailOccurrenceId = null
+                historyChoreName = occurrence.choreName
+                viewModel.loadChoreHistory(occurrence.choreId)
+            },
+        )
+    }
+
+    editChore?.let { chore ->
+        EditChoreDialog(
+            chore = chore,
+            members = state.members,
+            submitting = choreSubmitting,
+            serverError = choreError,
+            onDismiss = { editChoreId = null; choreError = null },
+            onSave = { name, doneLine, intervalDays, weekdays, rotation ->
+                choreSubmitting = true
+                choreError = null
+                viewModel.updateChore(
+                    chore.id, name, doneLine, intervalDays, weekdays, rotation,
+                ) { failure ->
+                    choreSubmitting = false
+                    if (failure == null) editChoreId = null else choreError = failure
+                }
+            },
+        )
+    }
+    // An occurrence can vanish under the sheet: undoing a completion deletes
+    // the one it spawned. Close rather than leave a sheet describing a row that
+    // no longer exists.
+    LaunchedEffect(detailOccurrenceId, state.occurrences) {
+        if (detailOccurrenceId != null && state.occurrences.none { it.id == detailOccurrenceId }) {
+            detailOccurrenceId = null
+        }
+    }
+
     if (showCreateTask) {
         CreateTaskDialog(
             members = state.members,
-            onDismiss = { showCreateTask = false },
+            submitting = taskSubmitting,
+            serverError = taskError,
+            onDismiss = { showCreateTask = false; taskError = null },
             onCreate = { title, desc, assignee ->
-                showCreateTask = false
-                viewModel.createTask(title, desc, assignee)
+                // The dialog stays up until the write lands. Closing first and
+                // reporting afterwards threw away everything typed into it.
+                taskSubmitting = true
+                taskError = null
+                viewModel.createTask(title, desc, assignee) { failure ->
+                    taskSubmitting = false
+                    if (failure == null) showCreateTask = false else taskError = failure
+                }
+            },
+        )
+    }
+
+    if (showCreateChore) {
+        CreateChoreDialog(
+            members = state.members,
+            submitting = choreSubmitting,
+            serverError = choreError,
+            onDismiss = { showCreateChore = false; choreError = null },
+            onCreate = { name, doneLine, scheduleType, intervalDays, weekdays, rotation ->
+                choreSubmitting = true
+                choreError = null
+                viewModel.createChore(
+                    name, doneLine, scheduleType, intervalDays, weekdays, rotation,
+                ) { failure ->
+                    choreSubmitting = false
+                    if (failure == null) showCreateChore = false else choreError = failure
+                }
+            },
+        )
+    }
+
+    historyChoreName?.let { name ->
+        ChoreHistorySheet(
+            choreName = name,
+            history = state.choreHistory,
+            loading = state.historyLoading,
+            onDismiss = { historyChoreName = null; viewModel.clearHistory() },
+        )
+    }
+
+    if (showGroupHistory) {
+        GroupHistorySheet(
+            history = state.groupHistory,
+            window = state.historyWindow,
+            loading = state.historyLoading,
+            onWindowChange = { viewModel.loadGroupHistory(it) },
+            onDismiss = { showGroupHistory = false; viewModel.clearHistory() },
+        )
+    }
+
+    if (showAway) {
+        AwayDialog(
+            onDismiss = { showAway = false },
+            onConfirm = { until ->
+                showAway = false
+                viewModel.setAway(true, until)
+            },
+        )
+    }
+
+    if (showQuietHours) {
+        QuietHoursDialog(
+            from = state.quietFrom,
+            to = state.quietTo,
+            onDismiss = { showQuietHours = false },
+            onSave = { from, to ->
+                showQuietHours = false
+                viewModel.setQuietHours(from, to)
             },
         )
     }
@@ -491,46 +751,86 @@ private fun EmptyBlock(title: String, subtitle: String, action: (@Composable () 
 // ═══════════════════════════════════════════════════════════════
 
 /**
- * The Board — F1.
+ * One row on the board, from either of the two shapes it can hold.
+ *
+ * F2 introduces chore occurrences, but tasks predate them and are already the
+ * spec's "one-off" type, so both live on the board together rather than one
+ * being hidden or migrated away. The board's question — "what still needs
+ * doing and whose is it" — is the same for both, so the sections and the row
+ * are shared and only the source differs.
+ */
+private sealed interface BoardRow {
+    val key: String
+    val title: String
+    val assignedTo: String?
+    val dueDate: OffsetDateTime?
+    val isOpen: Boolean
+    val doneBy: String?
+    val doneAt: OffsetDateTime?
+
+    data class TaskRow(val task: Task) : BoardRow {
+        override val key get() = "task-${task.id}"
+        override val title get() = task.title
+        override val assignedTo get() = task.assignedTo
+        override val dueDate get() = task.dueDate
+        override val isOpen get() = task.isOpen
+        override val doneBy get() = task.doneBy
+        override val doneAt get() = task.doneAt
+    }
+
+    data class OccurrenceRow(val occurrence: Occurrence) : BoardRow {
+        override val key get() = "occ-${occurrence.id}"
+        override val title get() = occurrence.choreName
+        // Never null: every occurrence has exactly one name on it.
+        override val assignedTo get() = occurrence.assignedTo
+        override val dueDate get() = occurrence.dueDate
+        override val isOpen get() = occurrence.isOpen
+        override val doneBy get() = occurrence.doneBy
+        override val doneAt get() = occurrence.doneAt
+    }
+}
+
+/**
+ * The Board — F1, now reading the chore model as well.
  *
  * Three sections, in this order: **Yours**, **Others**, **Done**. Grouping by
  * ownership rather than by status is the whole point: the question the board
  * answers is "what still needs doing and whose is it", so the first thing you
  * should see is your own name's worth of work.
  *
- * Unassigned tasks sit under Others for now. The chore model has no such thing
- * — "everything on the board always has exactly one name on it" — but tasks
+ * Unassigned tasks sit under Others. The chore model has no such thing —
+ * "everything on the board always has exactly one name on it" — but tasks
  * created before that rule exists still can, and hiding them would lose them.
  */
 @Composable
 private fun TaskList(
-    tasks: List<Task>,
+    rows: List<BoardRow>,
     members: List<MemberInfo>,
     myUserId: String?,
-    onOpenDetail: (Task) -> Unit,
-    onToggleDone: (Task) -> Unit,
+    onOpenDetail: (BoardRow) -> Unit,
+    onToggleDone: (BoardRow) -> Unit,
     onCreate: () -> Unit,
 ) {
-    if (tasks.isEmpty()) {
+    if (rows.isEmpty()) {
         EmptyBlock(
             title = "Nothing on the board",
-            subtitle = "Add the first task and it'll show up for everyone in the group.",
+            subtitle = "Add the first chore and it'll show up for everyone in the group.",
         ) {
             FilledTonalButton(onClick = onCreate) {
                 Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("New task")
+                Text("New chore")
             }
         }
         return
     }
 
-    val sections = remember(tasks, myUserId) {
-        val open = tasks.filter { it.isOpen }
+    val sections = remember(rows, myUserId) {
+        val open = rows.filter { it.isOpen }
         listOf(
             "Yours" to open.filter { it.assignedTo != null && it.assignedTo == myUserId },
             "Others" to open.filter { it.assignedTo == null || it.assignedTo != myUserId },
-            "Done" to tasks.filterNot { it.isOpen },
+            "Done" to rows.filterNot { it.isOpen },
         ).filter { it.second.isNotEmpty() }
     }
 
@@ -553,14 +853,14 @@ private fun TaskList(
                     modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
                 )
             }
-            items(rows, key = { it.id }) { task ->
+            items(rows, key = { it.key }) { row ->
                 TaskCard(
-                    task = task,
-                    assigneeName = members.firstOrNull { it.id == task.assignedTo }?.username,
-                    doneByName = members.firstOrNull { it.id == task.doneBy }?.username,
+                    row = row,
+                    assigneeName = members.firstOrNull { it.id == row.assignedTo }?.username,
+                    doneByName = members.firstOrNull { it.id == row.doneBy }?.username,
                     myUserId = myUserId,
-                    onOpenDetail = { onOpenDetail(task) },
-                    onToggleDone = { onToggleDone(task) },
+                    onOpenDetail = { onOpenDetail(row) },
+                    onToggleDone = { onToggleDone(row) },
                 )
             }
         }
@@ -587,19 +887,46 @@ private val UNDO_WINDOW: Duration = Duration.ofMinutes(10)
  */
 @Composable
 private fun TaskCard(
-    task: Task,
+    row: BoardRow,
     assigneeName: String?,
     doneByName: String?,
     myUserId: String?,
     onOpenDetail: () -> Unit,
     onToggleDone: () -> Unit,
 ) {
-    val overdue = isOverdue(task)
+    val overdue = isOverdue(row)
+
     // Undo is offered only to the person who ticked it, and only briefly.
     // Anything older is history, and history is not editable from the board.
-    val canUndo = !task.isOpen &&
-        task.doneBy != null && task.doneBy == myUserId &&
-        task.doneAt?.let { Duration.between(it, OffsetDateTime.now()) < UNDO_WINDOW } == true
+    //
+    // The permission half is a plain comparison. The *expiry* half cannot be:
+    // reading the clock during composition freezes the answer at whatever it
+    // was when the row was last drawn, so the checkbox stayed enabled well past
+    // ten minutes until something unrelated happened to recompose it (B-6).
+    //
+    // Instead the row waits out its own window. One coroutine per undoable row,
+    // sleeping exactly until the moment it lapses — no polling, and no clock
+    // read that can go stale.
+    val mineToUndo = !row.isOpen && row.doneBy != null && row.doneBy == myUserId
+    var windowOpen by remember(row.key, row.doneAt) { mutableStateOf(false) }
+
+    LaunchedEffect(row.key, row.doneAt, mineToUndo) {
+        val doneAt = row.doneAt
+        if (!mineToUndo || doneAt == null) {
+            windowOpen = false
+            return@LaunchedEffect
+        }
+        val remaining = Duration.between(OffsetDateTime.now(), doneAt.plus(UNDO_WINDOW))
+        if (remaining.isNegative || remaining.isZero) {
+            windowOpen = false
+            return@LaunchedEffect
+        }
+        windowOpen = true
+        delay(remaining.toMillis())
+        windowOpen = false
+    }
+
+    val canUndo = mineToUndo && windowOpen
 
     ElevatedCard(
         modifier = Modifier
@@ -617,21 +944,21 @@ private fun TaskCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Checkbox(
-                checked = !task.isOpen,
+                checked = !row.isOpen,
                 // Ticking is always allowed; unticking only inside the window.
-                enabled = task.isOpen || canUndo,
+                enabled = row.isOpen || canUndo,
                 onCheckedChange = { onToggleDone() },
             )
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = task.title,
+                    text = row.title,
                     style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     // Dimmed rather than struck through: done work stays
                     // readable, it just stops asking for attention.
-                    color = if (task.isOpen) MaterialTheme.colorScheme.onSurface
+                    color = if (row.isOpen) MaterialTheme.colorScheme.onSurface
                     else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(4.dp))
@@ -647,7 +974,7 @@ private fun TaskCard(
                                 .background(overdueColor()),
                         )
                     }
-                    task.dueDate?.let {
+                    row.dueDate?.let {
                         Text(
                             text = formatDueDate(it),
                             style = MaterialTheme.typography.labelSmall,
@@ -655,15 +982,17 @@ private fun TaskCard(
                             else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    val who = if (task.isOpen) assigneeName else doneByName
+                    val who = if (row.isOpen) assigneeName else doneByName
                     who?.let {
                         Text(
-                            text = if (task.isOpen) it else "done by $it",
+                            text = if (row.isOpen) it else "done by $it",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    if (task.status == "in_progress") StatusChip(task.status)
+                    if (row is BoardRow.TaskRow && row.task.status == "in_progress") {
+                        StatusChip(row.task.status)
+                    }
                 }
             }
 
@@ -692,6 +1021,173 @@ private fun TaskCard(
  * reflects a teammate's concurrent change rather than a stale snapshot taken
  * when it opened.
  */
+/**
+ * Detail for one chore occurrence — where F4's "what done means" is finally
+ * read.
+ *
+ * The line is agreed once, at the chore, and shown on every occurrence of it.
+ * That is the whole mechanism: it moves the standards argument (what counts as
+ * "clean"? how often is often enough?) out of each individual turn and into a
+ * single setup conversation the household has once. So the done-line and the
+ * frequency sit together at the top, before anything about this particular
+ * cycle — they describe the agreement; the rest describes today.
+ *
+ * Read-only. Editing a chore is open to every member and broadcasts a diff to
+ * the group, which is a different affordance in a different place — this sheet
+ * is for the person about to do the chore, wondering what "done" means.
+ *
+ * Deliberately absent: anything about lateness. A past-due occurrence shows its
+ * date exactly as any other does. There is no "overdue" line, no day count and
+ * no colour beyond the same amber the board uses — constraint 3, and the detail
+ * view is precisely where a shame badge would feel most justified and do most
+ * damage.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun OccurrenceDetailSheet(
+    occurrence: Occurrence,
+    chore: Chore?,
+    members: List<MemberInfo>,
+    myUserId: String?,
+    onDismiss: () -> Unit,
+    onEditChore: () -> Unit,
+    onShowHistory: () -> Unit,
+    onPass: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val assignee = members.firstOrNull { it.id == occurrence.assignedTo }?.username
+    val doer = members.firstOrNull { it.id == occurrence.doneBy }?.username
+    val passer = occurrence.passedFrom?.let { id -> members.firstOrNull { it.id == id }?.username }
+
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text(
+                text = occurrence.choreName,
+                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+            )
+
+            // The agreement: what done means, and how often. Together, because
+            // apart they are only half of what was agreed.
+            val doneLine = occurrence.doneLine.trim()
+            if (doneLine.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("What done means", style = MaterialTheme.typography.labelLarge)
+                    Text(doneLine, style = MaterialTheme.typography.bodyLarge)
+                }
+            } else {
+                Text(
+                    "No agreed definition of done for this chore yet.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            chore?.let {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("How often", style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        buildString {
+                            append(it.scheduleWording().replaceFirstChar { c -> c.uppercase() })
+                            it.neededByWording()?.let { needed -> append(", $needed") }
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+
+                // Any member may change the agreement — that is the point of
+                // it being an agreement. A quiet text button, not a primary
+                // action: reading this sheet is the common case, editing the
+                // household's standards is not.
+                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    TextButton(
+                        onClick = onEditChore,
+                        contentPadding = PaddingValues(0.dp),
+                    ) { Text("Edit chore") }
+                    TextButton(
+                        onClick = onShowHistory,
+                        contentPadding = PaddingValues(0.dp),
+                    ) { Text("History") }
+                }
+            }
+
+            HorizontalDivider()
+
+            // This cycle.
+            DetailRow("Whose turn", assignee ?: "—")
+            DetailRow(
+                "Due",
+                occurrence.dueDate?.let { formatDueDate(it) }
+                    // As-needed chores genuinely have no date. Saying so beats
+                    // an empty field, which reads like missing data.
+                    ?: "No date — it waits until it's needed",
+            )
+
+            // A passed chore says where it came from, so the receiver knows why
+            // it is on their row and the passer can see it landed. Neutral
+            // wording: passing is a normal move, not something to answer for.
+            if (occurrence.isOpen && passer != null) {
+                Text(
+                    if (occurrence.passedFrom == myUserId) {
+                        "You passed this on. It comes back to you next time."
+                    } else {
+                        "$passer passed this on, so it's yours this cycle."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            if (!occurrence.isOpen) {
+                DetailRow("Done by", doer ?: "—")
+                DetailRow("Done", formatStamp(occurrence.doneAt))
+                // Who the turn actually belonged to: the passer if it was
+                // passed, otherwise whoever it was assigned to.
+                val owed = passer ?: assignee
+                if (doer != null && owed != null && doer != owed) {
+                    // Stated plainly, without praise or blame either way. It is
+                    // simply how the next turn was decided.
+                    Text(
+                        "$doer covered this one, so the next turn goes back to $owed.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            // "Busy — pass it": only on an open occurrence that is actually
+            // yours. Passing somebody else's turn would be handing out work,
+            // and the server refuses it anyway.
+            if (occurrence.isOpen && occurrence.assignedTo == myUserId) {
+                HorizontalDivider()
+                OutlinedButton(onClick = onPass, modifier = Modifier.fillMaxWidth()) {
+                    Text("Busy — pass it on")
+                }
+                Text(
+                    "Goes to the next person in the rotation. It comes back to you next " +
+                        "time round, so this delays your turn rather than skipping it.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DetailRow(label: String, value: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun TaskDetailSheet(
@@ -1050,8 +1546,11 @@ private fun CalendarTab(
                 )
             } else {
                 dayTasks.forEach { task ->
+                    // The calendar still shows tasks only — chore occurrences
+                    // derive their dates from a schedule, and a month grid is
+                    // not where that is read.
                     TaskCard(
-                        task = task,
+                        row = BoardRow.TaskRow(task),
                         assigneeName = members.firstOrNull { it.id == task.assignedTo }?.username,
                         doneByName = members.firstOrNull { it.id == task.doneBy }?.username,
                         myUserId = myUserId,
@@ -1344,6 +1843,19 @@ private fun MemberList(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                            // Away is stated on the member list because the
+                            // spec makes it deliberately impossible to hide —
+                            // the app cannot check whether someone is really
+                            // gone, so it shows the claim to everyone instead.
+                            if (member.away) {
+                                Text(
+                                    text = member.awayUntil?.let { "Away until ${formatDueDate(it)}" }
+                                        ?: "Away",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
                         }
                         RoleChip(member.role)
                     }
@@ -1392,10 +1904,859 @@ private fun RoleChip(role: String) {
 // Dialogs
 // ═══════════════════════════════════════════════════════════════
 
+/**
+ * One chore's history (F6) — who did each cycle, when it was due, when it was
+ * done.
+ *
+ * Both dates are shown side by side and nothing is computed from them. A
+ * completion three days after its date simply reads "done Tue 8 Sep · was due
+ * Sat 5 Sep", and whether that matters is the reader's judgement. The moment
+ * the app renders "3 days late" it has taken a position, which is what the spec
+ * means by lateness being visible only as arithmetic.
+ *
+ * Absences are interleaved by date rather than listed separately, so a gap in
+ * someone's completions is visibly a gap in their being there — otherwise a
+ * quiet stretch reads as flaking, which is the misreading this view exists to
+ * prevent.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ChoreHistorySheet(
+    choreName: String,
+    history: ChoreHistory?,
+    loading: Boolean,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    // One list, newest first, of two kinds of thing.
+    val rows: List<Pair<OffsetDateTime, Any>> = remember(history) {
+        if (history == null) emptyList()
+        else (
+            history.entries.map { it.doneAt to (it as Any) } +
+                history.absences.map { it.startedAt to (it as Any) }
+            ).sortedByDescending { it.first }
+    }
+
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Text(
+                text = choreName,
+                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+            )
+            Text(
+                "Every time this has been done.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            HorizontalDivider()
+
+            when {
+                loading -> Text("Loading…", style = MaterialTheme.typography.bodyMedium)
+
+                rows.isEmpty() -> Text(
+                    "Nothing done yet. It'll show up here once someone ticks it off.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                else -> rows.forEach { (_, row) ->
+                    when (row) {
+                        is ChoreHistoryEntry -> Column(
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Text(
+                                text = buildString {
+                                    append("Done ")
+                                    append(formatDueDate(row.doneAt))
+                                    row.dueDate?.let { append(" · was due ${formatDueDate(it)}") }
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            Text(
+                                text = if (row.doneBy == row.assignedTo) {
+                                    "${row.doneByName}'s turn"
+                                } else {
+                                    // Named without comment. Who did it is the
+                                    // fact; what it says about anyone is not.
+                                    "${row.doneByName} did ${row.assigneeName}'s turn"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+
+                        is Absence -> Text(
+                            text = buildString {
+                                append("${row.username} away from ${formatDueDate(row.startedAt)}")
+                                row.finishedAt?.let { append(" to ${formatDueDate(it)}") }
+                                    ?: append(" — still away")
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            fontStyle = FontStyle.Italic,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The per-person view (F6): completions over a window.
+ *
+ * A count each, in the order people joined, with everyone listed — including
+ * anyone who has done nothing. Re-sorting by count, or hiding the zeroes, would
+ * build the leaderboard the whole feature is designed around not being. There
+ * are no totals, shares or averages for the same reason: the data is presented
+ * and the conclusions belong to the household.
+ *
+ * Days away sit beside the count so a quiet spell has its explanation attached
+ * rather than being left to speak for itself.
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+private fun GroupHistorySheet(
+    history: GroupHistory?,
+    window: String,
+    loading: Boolean,
+    onWindowChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Text(
+                text = "What's been done",
+                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+            )
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                listOf(
+                    "week" to "This week",
+                    "month" to "This month",
+                    "quarter" to "3 months",
+                ).forEach { (value, label) ->
+                    FilterChip(
+                        selected = window == value,
+                        onClick = { if (window != value) onWindowChange(value) },
+                        label = { Text(label) },
+                    )
+                }
+            }
+
+            HorizontalDivider()
+
+            if (loading || history == null) {
+                Text("Loading…", style = MaterialTheme.typography.bodyMedium)
+            } else {
+                history.people.forEach { person ->
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            text = person.username,
+                            style = MaterialTheme.typography.titleSmall.copy(
+                                fontWeight = FontWeight.Bold,
+                            ),
+                        )
+                        Text(
+                            text = when (person.completed) {
+                                0 -> "Nothing yet"
+                                1 -> "1 chore done"
+                                else -> "${person.completed} chores done"
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        if (person.awayDays > 0) {
+                            Text(
+                                text = if (person.awayDays == 1) "Away 1 day of this"
+                                else "Away ${person.awayDays} days of this",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontStyle = FontStyle.Italic,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+
+                Text(
+                    "Counted by who actually did it, so covering for someone counts for you.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Away (F5) — "I'm not at the house".
+ *
+ * The dialog states the rule it cannot enforce: away is for being physically
+ * gone, not for a busy week. The app has no way to check, so the spec's answer
+ * is to make the claim impossible to hide rather than to police it — hence the
+ * line about everyone seeing it. Social enforcement, zero mechanics.
+ *
+ * It also names the alternative, because someone reaching for "away" when they
+ * mean "not this week" needs somewhere else to go, and busy is right there on
+ * the chore itself.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AwayDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (until: String?) -> Unit,
+) {
+    // Open-ended by default: "I don't know when I'm back" is the honest common
+    // case, and guessing a return date you then have to correct is worse.
+    var days by remember { mutableStateOf<Int?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Away from the house", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "You'll be taken out of every rotation here until you're back, and you'll " +
+                        "come back in the same place. No turns are owed.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    "This is for actually being away. If you're sleeping at home but this week " +
+                        "is bad, use \"Busy — pass it on\" on the chore instead.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Text("Until", style = MaterialTheme.typography.labelMedium)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    FilterChip(
+                        selected = days == null,
+                        onClick = { days = null },
+                        label = { Text("Until I say") },
+                    )
+                    listOf(3, 7, 14, 30).forEach { option ->
+                        FilterChip(
+                            selected = days == option,
+                            onClick = { days = option },
+                            label = { Text("$option days") },
+                        )
+                    }
+                }
+
+                HorizontalDivider()
+                Text(
+                    "Everyone in the household can see that you're away.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                val until = days?.let {
+                    OffsetDateTime.now().plusDays(it.toLong())
+                        .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+                }
+                onConfirm(until)
+            }) { Text("I'm away") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/**
+ * Quiet hours (F3).
+ *
+ * The window when the app will not notify you. A reminder that would land
+ * inside it is held until the window opens, not dropped — which is worth saying
+ * on the dialog, because "quiet hours" could as easily mean "cancelled".
+ *
+ * The default wraps midnight, so the two fields are not a simple range and the
+ * copy avoids implying they are.
+ */
+@Composable
+private fun QuietHoursDialog(
+    from: String,
+    to: String,
+    onDismiss: () -> Unit,
+    onSave: (String, String) -> Unit,
+) {
+    var fromText by remember { mutableStateOf(from) }
+    var toText by remember { mutableStateOf(to) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    // "HH:MM", 24-hour. Kept deliberately strict so what the user types is
+    // exactly what the server stores.
+    fun valid(value: String): Boolean =
+        Regex("""^([01]\d|2[0-3]):([0-5]\d)$""").matches(value)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Quiet hours", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                AnimatedVisibility(visible = error != null) {
+                    Text(
+                        text = error ?: "",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Text(
+                    "Reminders won't arrive between these times. Anything due in that window waits until it's over — nothing is lost.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = fromText,
+                        onValueChange = { fromText = it.take(5); error = null },
+                        label = { Text("From") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedTextField(
+                        value = toText,
+                        onValueChange = { toText = it.take(5); error = null },
+                        label = { Text("Until") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Text(
+                    "24-hour, like 21:00.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                if (!valid(fromText) || !valid(toText)) {
+                    error = "Use 24-hour times, like 21:00"
+                    return@Button
+                }
+                if (fromText == toText) {
+                    error = "Start and end can't be the same time"
+                    return@Button
+                }
+                onSave(fromText, toText)
+            }) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/**
+ * Edit a chore — the other half of F4.
+ *
+ * A done-line that can only be set once is not an agreement, it is a decree.
+ * The standards conversation recurs ("is wiping the hob enough?", "weekly is too
+ * often"), and this is where the household settles it again.
+ *
+ * **Open to every member**, deliberately. The spec replaces an approval flow
+ * with transparency: anyone may change this, and the whole group is told what
+ * changed. The dialog says so before you save, because a change nobody expects
+ * to be visible is a change made differently.
+ *
+ * The schedule *type* is shown but not editable. Switching category would leave
+ * the open occurrence holding a due date derived from rules that no longer
+ * apply; a chore that has genuinely changed kind is a new chore.
+ *
+ * Only changed fields are sent — restating an untouched one would clobber a
+ * concurrent edit, and would announce a change nobody made.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun EditChoreDialog(
+    chore: Chore,
+    members: List<MemberInfo>,
+    submitting: Boolean,
+    serverError: String?,
+    onDismiss: () -> Unit,
+    onSave: (
+        name: String?,
+        doneLine: String?,
+        intervalDays: Int?,
+        fixedWeekdays: List<Int>?,
+        rotation: List<String>?,
+    ) -> Unit,
+) {
+    var name by remember(chore.id) { mutableStateOf(chore.name) }
+    var doneLine by remember(chore.id) { mutableStateOf(chore.doneLine) }
+    var intervalText by remember(chore.id) {
+        mutableStateOf(chore.intervalDays?.toString() ?: "7")
+    }
+    var weekday by remember(chore.id) {
+        mutableIntStateOf(chore.fixedWeekdays?.firstOrNull() ?: 2)
+    }
+    val rotation = remember(chore.id) { mutableStateListOf<String>().apply { addAll(chore.rotation) } }
+    var error by remember(chore.id) { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit chore", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+            ) {
+                val shown = error ?: serverError
+                AnimatedVisibility(visible = shown != null) {
+                    Text(
+                        text = shown ?: "",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it; error = null },
+                    label = { Text("Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = doneLine,
+                    onValueChange = { if (it.length <= 140) doneLine = it },
+                    label = { Text("What done means") },
+                    supportingText = { Text("${doneLine.length}/140") },
+                    maxLines = 2,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
+                when (chore.scheduleType) {
+                    ScheduleType.INTERVAL -> {
+                        Text("How often", style = MaterialTheme.typography.labelMedium)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text("Every", style = MaterialTheme.typography.bodyMedium)
+                            OutlinedTextField(
+                                value = intervalText,
+                                onValueChange = {
+                                    intervalText = it.filter { c -> c.isDigit() }.take(3)
+                                    error = null
+                                },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.width(96.dp),
+                            )
+                            Text(
+                                if (intervalText.toIntOrNull() == 1) "day" else "days",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                    }
+
+                    ScheduleType.FIXED_DATE -> {
+                        Text("Which day", style = MaterialTheme.typography.labelMedium)
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            listOf(
+                                1 to "Mon", 2 to "Tue", 3 to "Wed", 4 to "Thu",
+                                5 to "Fri", 6 to "Sat", 0 to "Sun",
+                            ).forEach { (day, label) ->
+                                FilterChip(
+                                    selected = weekday == day,
+                                    onClick = { weekday = day; error = null },
+                                    label = { Text(label) },
+                                )
+                            }
+                        }
+                    }
+
+                    else -> {
+                        // As-needed and one-off have no schedule to adjust. The
+                        // type is still worth stating, so the absence of a
+                        // control reads as deliberate rather than missing.
+                        Text(
+                            "This chore is ${chore.scheduleWording()}, which can't be changed. " +
+                                "Make a new chore if that's what needs to change.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
+                Text("Whose turn, in order", style = MaterialTheme.typography.labelMedium)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    members.forEach { member ->
+                        val position = rotation.indexOf(member.id)
+                        FilterChip(
+                            selected = position >= 0,
+                            onClick = {
+                                if (position >= 0) rotation.remove(member.id)
+                                else rotation.add(member.id)
+                                error = null
+                            },
+                            label = {
+                                // Away is shown wherever a name appears in a
+                                // rotation, per F5. Still selectable: you may
+                                // well want someone in the order for when they
+                                // are back; assignment simply steps over them.
+                                Text(
+                                    buildString {
+                                        if (position >= 0) append("${position + 1}. ")
+                                        append(member.username)
+                                        if (member.away) append(" · away")
+                                    },
+                                )
+                            },
+                        )
+                    }
+                }
+                Text(
+                    "Reordering changes who comes next, not whose turn it is now — " +
+                        "an open chore stays with whoever has it until it's done.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                HorizontalDivider()
+                Text(
+                    "Everyone in the group will see what you changed.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val trimmedName = name.trim()
+                    if (trimmedName.isBlank()) {
+                        error = "Name is required"
+                        return@Button
+                    }
+                    val interval = intervalText.toIntOrNull()
+                    if (chore.scheduleType == ScheduleType.INTERVAL &&
+                        (interval == null || interval !in 1..365)
+                    ) {
+                        error = "How often must be a number of days between 1 and 365"
+                        return@Button
+                    }
+                    if (rotation.isEmpty()) {
+                        error = "Pick at least one person for the rotation"
+                        return@Button
+                    }
+
+                    // Only what actually changed. Sending an untouched field
+                    // would overwrite someone else's concurrent edit to it, and
+                    // would put a change nobody made into the group's diff.
+                    val newRotation = rotation.toList()
+                    onSave(
+                        trimmedName.takeIf { it != chore.name },
+                        doneLine.trim().takeIf { it != chore.doneLine },
+                        interval.takeIf {
+                            chore.scheduleType == ScheduleType.INTERVAL && it != chore.intervalDays
+                        },
+                        listOf(weekday).takeIf {
+                            chore.scheduleType == ScheduleType.FIXED_DATE &&
+                                chore.fixedWeekdays?.firstOrNull() != weekday
+                        },
+                        newRotation.takeIf { it != chore.rotation },
+                    )
+                },
+                enabled = !submitting,
+            ) { Text(if (submitting) "Saving…" else "Save") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !submitting) { Text("Cancel") }
+        },
+    )
+}
+
+/**
+ * New chore — a definition, not a to-do.
+ *
+ * The two things that make it a chore rather than a task are here: a schedule,
+ * and an ordered rotation. Rotation is a multi-select whose *order* is the turn
+ * order, built by tapping names in the sequence you want them to come round —
+ * so the control shows a position number rather than a tick.
+ *
+ * "What done means" (F4) is offered at creation because that is the moment the
+ * household actually agrees it; the 140-char cap is the spec's, and it is a
+ * treaty rather than a manual.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CreateChoreDialog(
+    members: List<MemberInfo>,
+    submitting: Boolean,
+    serverError: String?,
+    onDismiss: () -> Unit,
+    onCreate: (
+        name: String,
+        doneLine: String,
+        scheduleType: String,
+        intervalDays: Int?,
+        fixedWeekdays: List<Int>?,
+        rotation: List<String>,
+    ) -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    var doneLine by remember { mutableStateOf("") }
+    var scheduleType by remember { mutableStateOf(ScheduleType.INTERVAL) }
+    // Held as text, not an Int: the field has to be allowed to be empty while
+    // someone clears it to type a new number, and an Int has no way to say so.
+    var intervalText by remember { mutableStateOf("7") }
+    var weekday by remember { mutableIntStateOf(2) } // Tuesday
+    // Order matters: this is the turn order, not a set.
+    val rotation = remember { mutableStateListOf<String>() }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("New Chore", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+            ) {
+                // At the top, not the bottom: this form is taller than the
+                // dialog, and an error under the fold is not feedback — the
+                // button just appears to do nothing.
+                //
+                // The local check wins over the server's: if the user has just
+                // typed something invalid, that is the more useful message, and
+                // the rejection they are reading refers to what they sent last.
+                val shown = error ?: serverError
+                AnimatedVisibility(visible = shown != null) {
+                    Text(
+                        text = shown ?: "",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it; error = null },
+                    label = { Text("Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = doneLine,
+                    onValueChange = { if (it.length <= 140) doneLine = it },
+                    label = { Text("What done means (optional)") },
+                    supportingText = { Text("${doneLine.length}/140") },
+                    maxLines = 2,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
+                Text("How often", style = MaterialTheme.typography.labelMedium)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    // One-off is deliberately absent: a one-off is a task, and
+                    // the board already creates those through New Task.
+                    listOf(
+                        ScheduleType.INTERVAL to "Every N days",
+                        ScheduleType.FIXED_DATE to "A fixed day",
+                        ScheduleType.AS_NEEDED to "As needed",
+                    ).forEach { (type, label) ->
+                        FilterChip(
+                            selected = scheduleType == type,
+                            onClick = { scheduleType = type },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+
+                when (scheduleType) {
+                    ScheduleType.INTERVAL -> {
+                        // Any whole number of days, typed or stepped. The
+                        // presets below are shortcuts, not the whole choice —
+                        // a fortnightly bin collection has no chip.
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text("Every", style = MaterialTheme.typography.bodyMedium)
+                            OutlinedTextField(
+                                value = intervalText,
+                                onValueChange = { typed ->
+                                    // Digits only, and short enough that the
+                                    // field can't hold a number the backend
+                                    // will reject on length alone.
+                                    val digits = typed.filter { it.isDigit() }.take(3)
+                                    intervalText = digits
+                                    error = null
+                                },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.width(96.dp),
+                            )
+                            Text(
+                                if (intervalText.toIntOrNull() == 1) "day" else "days",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            listOf(
+                                1 to "Daily", 7 to "Weekly",
+                                14 to "Fortnightly", 30 to "Monthly",
+                            ).forEach { (days, label) ->
+                                FilterChip(
+                                    selected = intervalText.toIntOrNull() == days,
+                                    onClick = { intervalText = days.toString(); error = null },
+                                    label = { Text(label) },
+                                )
+                            }
+                        }
+
+                        Text(
+                            "Counted from the last time it was done, so doing it late moves the whole schedule.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+
+                    ScheduleType.FIXED_DATE -> {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            // 0 = Sunday, matching the backend.
+                            listOf(
+                                1 to "Mon", 2 to "Tue", 3 to "Wed", 4 to "Thu",
+                                5 to "Fri", 6 to "Sat", 0 to "Sun",
+                            ).forEach { (day, label) ->
+                                FilterChip(
+                                    selected = weekday == day,
+                                    onClick = { weekday = day },
+                                    label = { Text(label) },
+                                )
+                            }
+                        }
+                    }
+
+                    else -> {
+                        Text(
+                            "No date — it just sits with whoever's turn it is until it's done.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
+                Text("Whose turn, in order", style = MaterialTheme.typography.labelMedium)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    members.forEach { member ->
+                        val position = rotation.indexOf(member.id)
+                        FilterChip(
+                            selected = position >= 0,
+                            onClick = {
+                                if (position >= 0) rotation.remove(member.id)
+                                else rotation.add(member.id)
+                                error = null
+                            },
+                            label = {
+                                // Away is shown wherever a name appears in a
+                                // rotation, per F5. Still selectable: you may
+                                // well want someone in the order for when they
+                                // are back; assignment simply steps over them.
+                                Text(
+                                    buildString {
+                                        if (position >= 0) append("${position + 1}. ")
+                                        append(member.username)
+                                        if (member.away) append(" · away")
+                                    },
+                                )
+                            },
+                        )
+                    }
+                }
+                Text(
+                    "The first person gets the first turn. It moves on only when the chore is actually done.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                if (name.isBlank()) {
+                    error = "Name is required"
+                    return@Button
+                }
+                // Checked here rather than left to the backend so the message
+                // names the field the user is looking at.
+                val interval = intervalText.toIntOrNull()
+                if (scheduleType == ScheduleType.INTERVAL &&
+                    (interval == null || interval !in 1..365)
+                ) {
+                    error = "How often must be a number of days between 1 and 365"
+                    return@Button
+                }
+                if (rotation.isEmpty()) {
+                    error = "Pick at least one person for the rotation"
+                    return@Button
+                }
+                onCreate(
+                    name,
+                    doneLine,
+                    scheduleType,
+                    if (scheduleType == ScheduleType.INTERVAL) interval else null,
+                    if (scheduleType == ScheduleType.FIXED_DATE) listOf(weekday) else null,
+                    rotation.toList(),
+                )
+                // Deliberately not closing here — the caller closes it once the
+                // write has actually landed.
+            }, enabled = !submitting) {
+                Text(if (submitting) "Creating…" else "Create")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !submitting) { Text("Cancel") }
+        },
+    )
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CreateTaskDialog(
     members: List<MemberInfo>,
+    submitting: Boolean,
+    serverError: String?,
     onDismiss: () -> Unit,
     onCreate: (String, String, String?) -> Unit,
 ) {
@@ -1451,9 +2812,10 @@ private fun CreateTaskDialog(
                         }
                     }
                 }
-                AnimatedVisibility(visible = error != null) {
+                val shown = error ?: serverError
+                AnimatedVisibility(visible = shown != null) {
                     Text(
-                        text = error ?: "",
+                        text = shown ?: "",
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -1466,10 +2828,15 @@ private fun CreateTaskDialog(
                     error = "Title is required"
                     return@Button
                 }
+                // The caller closes this once the write has landed, not here.
                 onCreate(title, description, assignee?.id)
-            }) { Text("Create") }
+            }, enabled = !submitting) {
+                Text(if (submitting) "Creating…" else "Create")
+            }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !submitting) { Text("Cancel") }
+        },
     )
 }
 
@@ -1632,6 +2999,18 @@ private fun formatDueDate(due: OffsetDateTime): String {
 private fun isOverdue(task: Task): Boolean {
     val due = task.dueDate ?: return false
     return task.status != "done" && due.isBefore(OffsetDateTime.now())
+}
+
+/**
+ * The same question for a board row of either shape.
+ *
+ * Note what this deliberately is not: a state. An open occurrence past its date
+ * is still just open — there is no "missed" anywhere in the system, and this
+ * only decides whether the date is drawn in amber.
+ */
+private fun isOverdue(row: BoardRow): Boolean {
+    val due = row.dueDate ?: return false
+    return row.isOpen && due.isBefore(OffsetDateTime.now())
 }
 
 /** Absolute date for the detail sheet, where "23h ago" is less useful than a date. */

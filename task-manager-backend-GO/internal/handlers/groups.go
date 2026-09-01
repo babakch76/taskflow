@@ -93,9 +93,17 @@ func (h *GroupHandler) GetGroup(w http.ResponseWriter, r *http.Request) {
 	// Compute progress for the progress bar widget. A failure here must not be
 	// swallowed: the zero values would render as "0 tasks, 0% done", which is
 	// indistinguishable from a genuinely empty group.
+	//
+	// Both halves of the board are counted. Tasks alone would under-report the
+	// moment a group has chores — the header would say "1 of 5" over a screen
+	// showing eight rows, which is worse than no counter at all.
 	if err := h.DB.QueryRow(
-		`SELECT COUNT(*), COALESCE(SUM(CASE WHEN status='done' THEN 1 ELSE 0 END), 0) FROM tasks WHERE group_id = ?`,
-		groupID,
+		`SELECT
+			(SELECT COUNT(*) FROM tasks WHERE group_id = ?) +
+			(SELECT COUNT(*) FROM occurrences WHERE group_id = ?),
+			(SELECT COALESCE(SUM(CASE WHEN status='done' THEN 1 ELSE 0 END), 0) FROM tasks WHERE group_id = ?) +
+			(SELECT COALESCE(SUM(CASE WHEN status='done' THEN 1 ELSE 0 END), 0) FROM occurrences WHERE group_id = ?)`,
+		groupID, groupID, groupID, groupID,
 	).Scan(&g.TotalTasks, &g.DoneTasks); err != nil {
 		log.Printf("GetGroup: progress scan failed for group %s: %v", groupID, err)
 		jsonError(w, "internal error", http.StatusInternalServerError)
@@ -148,13 +156,23 @@ func (h *GroupHandler) ListMyGroups(w http.ResponseWriter, r *http.Request) {
 func (h *GroupHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
 	groupID := r.PathValue("group_id")
 
+	// Away is returned here because the spec makes it deliberately impossible to
+	// hide: it shows on the member list and anywhere a name appears in a
+	// rotation. The app cannot enforce that away means away — it makes the
+	// claim visible to everyone instead, and lets the household do the rest.
 	rows, err := h.DB.Query(`
-		SELECT u.id, u.username, u.email, gm.role, gm.joined_at
+		SELECT u.id, u.username, u.email, gm.role, gm.joined_at,
+		       ap.started_at, ap.ends_at
 		FROM group_members gm
 		JOIN users u ON u.id = gm.user_id
+		LEFT JOIN away_periods ap
+		       ON ap.group_id = gm.group_id
+		      AND ap.user_id = gm.user_id
+		      AND ap.ended_at IS NULL
+		      AND (ap.ends_at IS NULL OR ap.ends_at > ?)
 		WHERE gm.group_id = ?
 		ORDER BY gm.joined_at
-	`, groupID)
+	`, time.Now().UTC(), groupID)
 	if err != nil {
 		jsonError(w, "internal error", http.StatusInternalServerError)
 		return
@@ -167,14 +185,123 @@ func (h *GroupHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
 		Email    string    `json:"email"`
 		Role     string    `json:"role"`
 		JoinedAt time.Time `json:"joined_at"`
+		// Away right now, as opposed to merely having a period on record —
+		// a finished one is not away, and clients should not have to work that
+		// out from the dates themselves.
+		Away      bool       `json:"away"`
+		AwayUntil *time.Time `json:"away_until,omitempty"`
 	}
+
+	now := time.Now()
 	members := []MemberInfo{}
 	for rows.Next() {
 		var m MemberInfo
-		rows.Scan(&m.ID, &m.Username, &m.Email, &m.Role, &m.JoinedAt)
+		var awaySince, awayUntil sql.NullTime
+		if err := rows.Scan(&m.ID, &m.Username, &m.Email, &m.Role, &m.JoinedAt,
+			&awaySince, &awayUntil); err != nil {
+			log.Printf("ListMembers: scan failed for group %s: %v", groupID, err)
+			jsonError(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		m.Away = awaySince.Valid && (!awayUntil.Valid || awayUntil.Time.After(now))
+		if m.Away && awayUntil.Valid {
+			m.AwayUntil = &awayUntil.Time
+		}
 		members = append(members, m)
 	}
+	if err := rows.Err(); err != nil {
+		log.Printf("ListMembers: rows error for group %s: %v", groupID, err)
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	jsonResponse(w, http.StatusOK, members)
+}
+
+// SetAway handles PUT /groups/{group_id}/members/me/away — F5's second honest
+// exit, for being physically absent rather than merely overloaded.
+//
+// Away lifts you out of every rotation in this household until you return, and
+// re-enters you at the same position — which needs no bookkeeping, because the
+// order never changes and assignment simply steps over you. **No turns are owed
+// back.** That is the difference from busy: a pass defers a turn you still owe,
+// away means the turns that would have been yours were never yours.
+//
+// Per household, not per person: you can be away from one flat and still be
+// living in another. It is also not enforceable — the app cannot tell whether
+// you are really gone — so the spec makes it impossible to hide instead, and
+// ListMembers reports it to everyone.
+func (h *GroupHandler) SetAway(w http.ResponseWriter, r *http.Request) {
+	groupID := r.PathValue("group_id")
+	userID := middleware.GetUserID(r)
+
+	var req models.SetAwayRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	now := time.Now().UTC()
+
+	if !req.Away {
+		// Coming back closes the period rather than erasing it. The absence
+		// still happened, and F6 has to be able to say so — a completion count
+		// that dips for three weeks with no explanation reads as flaking.
+		if _, err := h.DB.Exec(
+			`UPDATE away_periods SET ended_at = ?
+			 WHERE group_id = ? AND user_id = ? AND ended_at IS NULL`,
+			now, groupID, userID,
+		); err != nil {
+			jsonError(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		jsonResponse(w, http.StatusOK, map[string]any{"away": false})
+		return
+	}
+
+	var until *time.Time
+	if req.Until != nil {
+		parsed, err := time.Parse(time.RFC3339, *req.Until)
+		if err != nil {
+			jsonError(w, "until must be RFC3339 format", http.StatusBadRequest)
+			return
+		}
+		if !parsed.After(time.Now()) {
+			// An away period that is already over would store as away and read
+			// as present, which is the kind of state nobody can debug from the
+			// UI.
+			jsonError(w, "until must be in the future", http.StatusBadRequest)
+			return
+		}
+		until = &parsed
+	}
+
+	// Close any period still open before starting a new one, so declaring away
+	// twice cannot leave two overlapping records for one person.
+	if _, err := h.DB.Exec(
+		`UPDATE away_periods SET ended_at = ?
+		 WHERE group_id = ? AND user_id = ? AND ended_at IS NULL`,
+		now, groupID, userID,
+	); err != nil {
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if _, err := h.DB.Exec(
+		`INSERT INTO away_periods (id, group_id, user_id, started_at, ends_at)
+		 VALUES (?,?,?,?,?)`,
+		uuid.New().String(), groupID, userID, now, until,
+	); err != nil {
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// No activity event, and no notification. Away is a state the household
+	// reads off the member list, not an announcement — the same posture the
+	// spec takes for passes.
+	response := map[string]any{"away": true}
+	if until != nil {
+		response["away_until"] = until
+	}
+	jsonResponse(w, http.StatusOK, response)
 }
 
 // LeaveGroup handles DELETE /groups/{group_id}/members/me — the caller removes
@@ -331,7 +458,11 @@ func (h *GroupHandler) InviteByUsername(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// TODO: trigger push notification to targetID here
+	// No push notification here, and none planned. The invited user's Dashboard
+	// polls GET /invites while it is resumed, which is how an invite surfaces
+	// (B-2). F3 settled the wider question the same way: reminders are scheduled
+	// on the device, so this project has no push channel at all and adding one
+	// for invites alone would not pay for itself.
 	jsonResponse(w, http.StatusCreated, invite)
 }
 
