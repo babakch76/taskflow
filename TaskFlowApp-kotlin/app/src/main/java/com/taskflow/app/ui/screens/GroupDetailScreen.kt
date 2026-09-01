@@ -13,7 +13,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Close
@@ -72,12 +71,9 @@ import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.OffsetDateTime
-import java.time.YearMonth
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
-import java.time.format.TextStyle
-import java.time.temporal.WeekFields
 import java.util.Locale
 
 /** How often the activity feed is polled while this screen is on screen. */
@@ -88,9 +84,13 @@ private val TASK_STATUSES = listOf("todo", "in_progress", "done")
 /**
  * Group detail: tasks, activity feed, members and invites for one group.
  *
- * Four tabs rather than one long scroll: the activity feed is append-only and
- * would otherwise push the task list off screen, and the calendar needs the
- * full width to be readable.
+ * Three tabs rather than one long scroll: the activity feed is append-only and
+ * would otherwise push the board off screen.
+ *
+ * There was a fourth, a month view of due dates. It read `state.tasks` only, so
+ * it showed the one-off minority of the household's work and hid every rotation
+ * chore — and teaching it about occurrences would have meant building the
+ * scheduling view constraint 5 rules out. The board is the screen.
  *
  * @param groupId From the navigation arguments.
  * @param onBack Returns to the dashboard. Also called after leaving the group,
@@ -328,13 +328,9 @@ fun GroupDetailScreen(
                     state.group?.let { ProgressHeader(it.totalTasks, it.doneTasks, it.progress) }
 
                     run {
-                        // Scrollable, not fixed: four labels with counts don't
-                        // fit a phone's width, and a fixed TabRow wraps
-                        // "Members (4)" onto two lines rather than shrinking.
-                        ScrollableTabRow(
-                            selectedTabIndex = selectedTab,
-                            edgePadding = 12.dp,
-                        ) {
+                        // Fixed, not scrollable: three labels fit a phone's
+                        // width. It was scrollable while there were four.
+                        TabRow(selectedTabIndex = selectedTab) {
                             Tab(
                                 selected = selectedTab == 0,
                                 onClick = { selectedTab = 0 },
@@ -345,16 +341,11 @@ fun GroupDetailScreen(
                             Tab(
                                 selected = selectedTab == 1,
                                 onClick = { selectedTab = 1 },
-                                text = { Text("Calendar") },
+                                text = { Text("Activity") },
                             )
                             Tab(
                                 selected = selectedTab == 2,
                                 onClick = { selectedTab = 2 },
-                                text = { Text("Activity") },
-                            )
-                            Tab(
-                                selected = selectedTab == 3,
-                                onClick = { selectedTab = 3 },
                                 text = { Text("Members (${state.members.size})") },
                             )
                         }
@@ -394,22 +385,9 @@ fun GroupDetailScreen(
                             onCreate = { showCreate = true },
                         )
 
-                        1 -> CalendarTab(
-                            tasks = state.tasks,
-                            members = state.members,
-                            myUserId = myUserId,
-                            onOpenDetail = { detailTaskId = it.id },
-                            onToggleDone = { task ->
-                                viewModel.setTaskStatus(
-                                    task.id,
-                                    if (task.isOpen) "done" else "todo",
-                                )
-                            },
-                        )
+                        1 -> ActivityList(state.activity)
 
-                        2 -> ActivityList(state.activity)
-
-                        3 -> MemberList(
+                        2 -> MemberList(
                             members = state.members,
                             myUserId = myUserId,
                         )
@@ -1390,247 +1368,6 @@ private fun statusLabel(status: String) = when (status) {
     "in_progress" -> "In progress"
     "done" -> "Done"
     else -> status
-}
-
-// ═══════════════════════════════════════════════════════════════
-// Calendar
-// ═══════════════════════════════════════════════════════════════
-
-/**
- * Month view of the group's deadlines.
- *
- * A month grid rather than an agenda list, because the question this answers is
- * "how is the work spread out" — where the crunch weeks are, which is exactly
- * what a list of dates in order hides.
- *
- * Days carry a dot per task, coloured by state: overdue in the board's amber
- * (`overdueColor()`, never `error` — constraint 3), done in tertiary, otherwise
- * primary. Tapping a day lists its tasks underneath.
- * Tasks with no deadline aren't on the calendar at all, so their count is
- * reported at the bottom instead of being silently dropped.
- */
-@Composable
-private fun CalendarTab(
-    tasks: List<Task>,
-    members: List<MemberInfo>,
-    myUserId: String?,
-    onOpenDetail: (Task) -> Unit,
-    onToggleDone: (Task) -> Unit,
-) {
-    val zone = remember { ZoneId.systemDefault() }
-    val today = remember { LocalDate.now() }
-    var visibleMonth by remember { mutableStateOf(YearMonth.from(today)) }
-    var selectedDay by remember { mutableStateOf<LocalDate?>(null) }
-
-    // Deadline day (in the viewer's zone) → tasks due that day.
-    val byDay = remember(tasks, zone) {
-        tasks.filter { it.dueDate != null }
-            .groupBy { it.dueDate!!.atZoneSameInstant(zone).toLocalDate() }
-    }
-    val undated = remember(tasks) { tasks.count { it.dueDate == null } }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp)
-            .padding(bottom = 88.dp),
-    ) {
-        // ─── Month switcher ───
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            IconButton(onClick = { visibleMonth = visibleMonth.minusMonths(1) }) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Previous month")
-            }
-            Text(
-                text = visibleMonth.format(DateTimeFormatter.ofPattern("MMMM yyyy")),
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-            )
-            IconButton(onClick = { visibleMonth = visibleMonth.plusMonths(1) }) {
-                Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Next month")
-            }
-        }
-
-        // ─── Weekday headings ───
-        // Starts on the locale's own first day, so this reads correctly whether
-        // the user's week begins on Monday or Sunday.
-        val firstDayOfWeek = remember { WeekFields.of(Locale.getDefault()).firstDayOfWeek }
-        Row(modifier = Modifier.fillMaxWidth()) {
-            repeat(7) { i ->
-                Text(
-                    text = firstDayOfWeek.plus(i.toLong())
-                        .getDisplayName(TextStyle.SHORT, Locale.getDefault()),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.weight(1f),
-                )
-            }
-        }
-
-        Spacer(Modifier.height(4.dp))
-
-        // ─── Day grid ───
-        val firstOfMonth = visibleMonth.atDay(1)
-        // How many blanks before the 1st, given where this locale's week starts.
-        val leadingBlanks = ((firstOfMonth.dayOfWeek.value - firstDayOfWeek.value) + 7) % 7
-        val totalCells = leadingBlanks + visibleMonth.lengthOfMonth()
-        val rows = (totalCells + 6) / 7
-
-        repeat(rows) { row ->
-            Row(modifier = Modifier.fillMaxWidth()) {
-                repeat(7) { col ->
-                    val cell = row * 7 + col
-                    val dayOfMonth = cell - leadingBlanks + 1
-                    if (dayOfMonth < 1 || dayOfMonth > visibleMonth.lengthOfMonth()) {
-                        Spacer(Modifier.weight(1f).height(48.dp))
-                    } else {
-                        val date = visibleMonth.atDay(dayOfMonth)
-                        CalendarDayCell(
-                            date = date,
-                            tasksDue = byDay[date].orEmpty(),
-                            isToday = date == today,
-                            isSelected = date == selectedDay,
-                            onClick = { selectedDay = if (selectedDay == date) null else date },
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                }
-            }
-        }
-
-        Spacer(Modifier.height(12.dp))
-        HorizontalDivider()
-        Spacer(Modifier.height(12.dp))
-
-        // ─── Selected day, or a summary of the month ───
-        val selected = selectedDay
-        if (selected == null) {
-            val monthTasks = byDay.filterKeys { YearMonth.from(it) == visibleMonth }
-                .values.flatten()
-            Text(
-                text = when {
-                    monthTasks.isEmpty() -> "Nothing due in ${visibleMonth.format(DateTimeFormatter.ofPattern("MMMM"))}."
-                    monthTasks.size == 1 -> "1 task due this month. Tap a day to see it."
-                    else -> "${monthTasks.size} tasks due this month. Tap a day to see them."
-                },
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } else {
-            Text(
-                text = selected.format(DateTimeFormatter.ofPattern("EEEE d MMMM")),
-                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-            )
-            Spacer(Modifier.height(8.dp))
-            val dayTasks = byDay[selected].orEmpty()
-            if (dayTasks.isEmpty()) {
-                Text(
-                    text = "Nothing due on this day.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else {
-                dayTasks.forEach { task ->
-                    // The calendar still shows tasks only — chore occurrences
-                    // derive their dates from a schedule, and a month grid is
-                    // not where that is read.
-                    TaskCard(
-                        row = BoardRow.TaskRow(task),
-                        assigneeName = members.firstOrNull { it.id == task.assignedTo }?.username,
-                        doneByName = members.firstOrNull { it.id == task.doneBy }?.username,
-                        myUserId = myUserId,
-                        onOpenDetail = { onOpenDetail(task) },
-                        onToggleDone = { onToggleDone(task) },
-                    )
-                    Spacer(Modifier.height(8.dp))
-                }
-            }
-        }
-
-        if (undated > 0) {
-            Spacer(Modifier.height(16.dp))
-            Text(
-                text = if (undated == 1) "1 task has no deadline and isn't shown here."
-                else "$undated tasks have no deadline and aren't shown here.",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .8f),
-            )
-        }
-    }
-}
-
-@Composable
-private fun CalendarDayCell(
-    date: LocalDate,
-    tasksDue: List<Task>,
-    isToday: Boolean,
-    isSelected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val hasOverdue = tasksDue.any { isOverdue(it) }
-
-    Box(
-        modifier = modifier
-            .height(48.dp)
-            .padding(2.dp)
-            .clip(MaterialTheme.shapes.small)
-            .background(
-                when {
-                    isSelected -> MaterialTheme.colorScheme.primaryContainer
-                    isToday -> MaterialTheme.colorScheme.surfaceVariant
-                    else -> androidx.compose.ui.graphics.Color.Transparent
-                }
-            )
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                text = date.dayOfMonth.toString(),
-                style = MaterialTheme.typography.bodySmall.copy(
-                    fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
-                ),
-                color = if (isToday) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurface,
-            )
-            if (tasksDue.isNotEmpty()) {
-                Spacer(Modifier.height(2.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                    // Cap the dots — a day with nine deadlines should look busy,
-                    // not overflow its cell.
-                    tasksDue.take(3).forEach { task ->
-                        Box(
-                            modifier = Modifier
-                                .size(5.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    when {
-                                        !task.isOpen -> MaterialTheme.colorScheme.tertiary
-                                        isOverdue(task) -> overdueColor()
-                                        else -> MaterialTheme.colorScheme.primary
-                                    }
-                                )
-                        )
-                    }
-                    if (tasksDue.size > 3) {
-                        Text(
-                            text = "+",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (hasOverdue) overdueColor()
-                            else MaterialTheme.colorScheme.primary,
-                        )
-                    }
-                }
-            }
-        }
-    }
 }
 
 // ═══════════════════════════════════════════════════════════════
