@@ -146,23 +146,35 @@ happens when the board is read.
 
 ## 4. Blocked, needs Babak
 
-1. **The AWS server is now well behind — the whole of F1 and F2.** It still runs
-   the binary with the deadline 403, without `done_by`/`done_at`, and without
-   the chore model at all. SSH is refused because `taskflow-sg`'s SSH rule is
-   pinned to an IP that no longer matches.
-   **Fix:** AWS console → EC2 → Security Groups → `taskflow-sg` → Inbound rules
-   → Edit → SSH → source **My IP**. Check what the console reports as your
-   address rather than trusting a number written down earlier.
+1. ~~**The AWS server is well behind**~~ — **resolved 2026-09-01.** It is
+   current: the full v2 backend is deployed and every v2 endpoint answers 200.
 
-   Nothing is blocked by this: everything since F1 has been verified against a
-   backend run locally, with `taskflow.baseUrl` commented out of
-   `local.properties` so the build falls back to `http://10.0.2.2:8080/`.
-   `migrate()` runs on every start and has been exercised against a populated
-   database, so the deploy itself should be uneventful.
-2. **After deploying**, demote the leftover admin row:
-   `UPDATE group_members SET role='member' WHERE role='admin';`
-   Cosmetic only — the role grants nothing now — but the chip still reads
-   "Manager".
+   Two things in the old note turned out to be wrong by the time anyone acted
+   on them, which is worth knowing about this document generally: the v2 binary
+   had *already* been deployed on 1 September (16:17 UTC), and the leftover
+   `admin` rows had already been demoted — `group_members` holds only `owner`
+   and `member`. Whoever writes here next: check the box before believing this
+   section.
+
+2. ~~**Demote the leftover admin row**~~ — already done. Verified:
+   `SELECT role, COUNT(*) FROM group_members GROUP BY role;` returns
+   `member|5`, `owner|13`, and no `admin`.
+
+3. **Still needs Babak:** close the SSH rule again. AWS console → EC2 →
+   Security Groups → `taskflow-sg` → Inbound rules → remove or narrow the SSH
+   entry. It was opened for the 1–2 September deploy and should not stay open.
+
+**There are backups now**, which there were not before. `~/backups` on the box
+holds a WAL-safe `sqlite3 .backup` of the database and a copy of the binary it
+was taken alongside, both stamped `20260901T230027Z`. The database copy was
+verified row-for-row against the live one across all nine tables, not just
+`PRAGMA integrity_check`. `sqlite3` is now installed on the box, which it was
+not — a plain `cp` of that database would have been unsafe, since it runs in
+WAL mode and had a 531 KB WAL at the time.
+
+Restoring means putting **both** back: the binary alone re-runs the migrations
+against whatever database it finds, so a database rolled back under a new
+binary is not a rollback.
 
 ---
 
@@ -182,10 +194,20 @@ device-verified, on `v2-chores`:
 
 What is left is not features:
 
-1. **Deploy.** See section 4 — AWS is behind everything since F1, and the
-   security group still blocks SSH. `migrate()` has been exercised against a
-   populated database at every step, including two backfills, so the deploy
-   itself should be uneventful.
+1. ~~**Deploy.**~~ — **done.** The v2 binary went out on 1 September; the
+   backend was redeployed from `main` on 2 September and smoke-tested
+   (`/chores`, `/occurrences`, `/history`, `/members`, `/tasks`, `/activity`,
+   `/me` all 200, row counts unchanged across the restart). The redeploy
+   carried a comment and nothing else — the box had already been current — but
+   it exercised the path end to end and left `~/taskflow-src` matching `main`
+   exactly, which it had not.
+
+   The deploy recipe in section 6 works as written. Two things it does not say:
+   `go` is genuinely absent from the non-interactive PATH, so every remote
+   command needs `PATH=$PATH:/usr/local/go/bin`, and `sudo install -o taskflow
+   -g taskflow -m 0755` is what keeps the binary's ownership right — a plain
+   `cp` leaves it owned by root and the unit still starts, which hides the
+   mistake until something else needs to write.
 2. ~~**Merge `v2-chores` into `main`**~~ — **done** (`7d8798e`), ahead of the
    deploy rather than after it. The pre-v2 demo stays reachable as the tag
    `v1-final`, which is what keeping `main` unmerged was protecting. Work since
