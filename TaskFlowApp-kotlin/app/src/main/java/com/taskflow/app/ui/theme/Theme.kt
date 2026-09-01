@@ -49,7 +49,13 @@ private val LightColorScheme = lightColorScheme(
 @Composable
 fun TaskFlowTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = true,
+    // Off by default: Material You recolours the whole app from the wallpaper on
+    // Android 12+, so the violet scheme defined above is never what renders. The
+    // brand palette is part of the design, and the amber overdue colour is
+    // chosen to sit against it — a wallpaper-derived scheme can put a red
+    // primary next to it, which reads as exactly the shame signal constraint 3
+    // rules out.
+    dynamicColor: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     val colorScheme = when {
