@@ -1312,7 +1312,7 @@ private fun TaskDetailSheet(
                         style = MaterialTheme.typography.bodyMedium,
                         color = when {
                             task.dueDate == null -> MaterialTheme.colorScheme.onSurfaceVariant
-                            isOverdue(task) -> MaterialTheme.colorScheme.error
+                            isOverdue(task) -> overdueColor()
                             else -> MaterialTheme.colorScheme.onSurface
                         },
                     )
@@ -1413,8 +1413,9 @@ private fun statusLabel(status: String) = when (status) {
  * "how is the work spread out" — where the crunch weeks are, which is exactly
  * what a list of dates in order hides.
  *
- * Days carry a dot per task, coloured by state: overdue in error, done in
- * tertiary, otherwise primary. Tapping a day lists its tasks underneath.
+ * Days carry a dot per task, coloured by state: overdue in the board's amber
+ * (`overdueColor()`, never `error` — constraint 3), done in tertiary, otherwise
+ * primary. Tapping a day lists its tasks underneath.
  * Tasks with no deadline aren't on the calendar at all, so their count is
  * reported at the bottom instead of being silently dropped.
  */

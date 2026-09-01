@@ -82,6 +82,71 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
 
 ## Bugs
 
+### B-10 · The board still wears a completion percentage — OPEN
+
+**Reported:** 2026-09-01, while device-verifying phase 1 of the UI cleanup. Not
+in that prompt's scope; raised rather than improvised on.
+
+`ProgressHeader` (`GroupDetailScreen.kt` ~647, called at ~334) sits above the
+tabs and renders **"0 of 3 done"**, **"0%"** and a filling bar, from
+`GroupWithProgress.progress`. It is v1 furniture that survived the pivot.
+
+The spec's constraint 4 forbids "points, streaks, leaderboards, or
+gamification", and the Dynamics note under history is explicit: *"No points,
+ranks, streaks, percentages, or comparisons drawn by the app."* A household
+completion percentage is a conclusion the app is drawing — and because it
+counts the whole group's rows, a low number is a statement about the
+household's week, which is the shame signal constraints 3 and 4 exist to keep
+out. It also only counts `tasks`, not occurrences, so the number it shows is
+wrong as well as unwanted.
+
+**Fix:** delete `ProgressHeader` and its call. Nothing else reads
+`progress`/`doneTasks`; the API can keep returning them. Sits naturally with
+the phase-3 information-architecture commits, including B-11 — needs Babak's
+go-ahead first.
+
+---
+
+### B-11 · Board tab count includes done rows — OPEN
+
+**Reported:** 2026-09-01, same pass. Scheduled work: this is phase 3d of the
+UI cleanup prompt, recorded here so it is not lost if the phases stall.
+
+`Board (${tasks.size + occurrences.size})` counts every row including the done
+ones, so finishing a chore never moves the number. Count open rows, or drop the
+number.
+
+---
+
+### B-9 · Red overdue survived on the legacy task path — DONE (2026-09-01)
+
+**Reported and fixed** during the UI cleanup pass, phase 1.
+
+F1 made overdue amber on the board and left a comment beside `overdueColor()`
+saying `colorScheme.error` must not appear anywhere overdue is rendered. Two
+places on the legacy `Task` path still contradicted it — the board had been
+fixed, the screens either side of it had not:
+
+- `GroupDetailScreen.kt` ~1315, `TaskDetailSheet`: the deadline line rendered
+  `MaterialTheme.colorScheme.error` when the task was past due, so opening an
+  overdue task turned an amber row into a red one. Now `overdueColor()`, the
+  same amber the board and the calendar use — there is one amber, not two.
+- `GroupDetailScreen.kt` ~1416, `CalendarTab`: the *doc comment* still said the
+  dots are "overdue in error". The dot code below it had already been moved to
+  `overdueColor()`, so this was a stale description rather than a live
+  violation — but it is the comment a later change would have followed.
+
+Verified on the emulator against a local backend: a one-off task due three days
+ago shows amber on the board, amber on its detail sheet, and an amber dot on
+the calendar's 29 August. `Delete task` and "Title is required" are still red —
+the constraint is about lateness, not failures.
+
+The rest of `ui/` was grepped for `colorScheme.error`: every other use is an
+error message, a destructive control, or the Dashboard's avatar palette. None
+key off a due date.
+
+---
+
 ### B-8 · Reminders only cover the group whose board you last opened — DONE (2026-09-01)
 
 **Fixed:** the Dashboard now loads occurrences and chores for every group and
