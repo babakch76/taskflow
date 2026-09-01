@@ -187,6 +187,69 @@ type Occurrence struct {
 	DoneLine  string `json:"done_line"`
 }
 
+// ── History (F6) ────────────────────────────────────────────────────────────
+
+// ChoreHistoryEntry is one completed cycle of a chore.
+//
+// Note what is absent: there is no "late" field. The due date and the
+// completion time are both here, and whether one followed the other is
+// arithmetic the reader can do. A boolean would be the app reaching a verdict,
+// which is what the spec means by "visible only as date arithmetic, never as a
+// flag".
+type ChoreHistoryEntry struct {
+	OccurrenceID string `json:"occurrence_id"`
+	AssignedTo   string `json:"assigned_to"`
+	AssigneeName string `json:"assignee_name"`
+	// DoneBy may differ from AssignedTo — that is a cover, and the record
+	// credits whoever actually did it.
+	DoneBy     string  `json:"done_by"`
+	DoneByName string  `json:"done_by_name"`
+	PassedFrom *string `json:"passed_from,omitempty"`
+
+	DueDate *time.Time `json:"due_date,omitempty"`
+	DoneAt  time.Time  `json:"done_at"`
+}
+
+// Absence is one away period, for showing beside a timeline or explaining a
+// quiet stretch in someone's count.
+type Absence struct {
+	UserID    string     `json:"user_id"`
+	Username  string     `json:"username"`
+	StartedAt time.Time  `json:"started_at"`
+	EndsAt    *time.Time `json:"ends_at,omitempty"`
+	EndedAt   *time.Time `json:"ended_at,omitempty"`
+}
+
+type ChoreHistory struct {
+	ChoreID  string              `json:"chore_id"`
+	Entries  []ChoreHistoryEntry `json:"entries"`
+	Absences []Absence           `json:"absences"`
+}
+
+// PersonHistory is one member's completions in a window.
+//
+// A count and a number of days away, and nothing else — no percentage, no
+// share, no rank. AwayDays is here so a low count has its explanation next to
+// it rather than being left to look like flaking.
+type PersonHistory struct {
+	UserID    string `json:"user_id"`
+	Username  string `json:"username"`
+	Completed int    `json:"completed"`
+	AwayDays  int    `json:"away_days"`
+}
+
+// GroupHistory is the per-person view.
+//
+// People are returned in the order they joined, deliberately. Sorting by
+// completions would be a leaderboard whatever it was called, and constraint 4
+// rules those out.
+type GroupHistory struct {
+	Window string          `json:"window"`
+	From   time.Time       `json:"from"`
+	To     time.Time       `json:"to"`
+	People []PersonHistory `json:"people"`
+}
+
 // ActivityEvent is one entry in a group's audit trail. It is what the Android
 // client polls for to keep members aware of each other's changes.
 type ActivityEvent struct {

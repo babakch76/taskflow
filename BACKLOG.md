@@ -65,8 +65,10 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
   over a window, where an unexplained dip reads as exactly the flaking the spec
   forbids. Away is now an `away_periods` record, closed rather than erased on
   return, with a one-time backfill so upgrading doesn't silently un-away anyone.
-  Still to come: the two read-only views (per chore, per person) and their
-  client screens.
+  Both **endpoints** are done: per chore, a timeline of completions with the
+  due date and the done-at and deliberately no "late" flag; per person,
+  completions in a window counted by `done_by`, in join order, with everyone
+  listed and days-away alongside. Still to come: the client screens.
 - Multi-select and bulk status were removed with F1. The backend endpoint
   survives, unused by the client.
 

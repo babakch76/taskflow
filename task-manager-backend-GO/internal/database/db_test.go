@@ -148,3 +148,67 @@ func TestMigrateAddsUpdatedAtToPreExistingDatabase(t *testing.T) {
 	}
 	db2.Close()
 }
+
+// Upgrading a database that marked someone away under the old two-column scheme
+// must produce exactly one absence — and must keep producing exactly one, even
+// after that person comes back and the server restarts again.
+//
+// The first version of this migration skipped members who already had an *open*
+// period, which looks idempotent and isn't: returning closes the period, the
+// stale column still reads "away", and the next start inserts a duplicate. Two
+// overlapping records then double-count in F6's away-days arithmetic, which is
+// how it was noticed — a five-day trip reported as eleven days away.
+func TestAwayBackfillRunsOnceEvenAcrossAReturn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "upgrade.db")
+
+	db, err := New(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	// A member marked away the old way, as an upgraded database would have.
+	if _, err := db.Exec(`INSERT INTO users (id, username, email, password_hash) VALUES ('u1','ann','a@x','h')`); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO groups (id, name, created_by) VALUES ('g1','Flat','u1')`); err != nil {
+		t.Fatalf("seed group: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO group_members (id, group_id, user_id, role, away_since) VALUES ('m1','g1','u1','owner', datetime('now','-5 days'))`,
+	); err != nil {
+		t.Fatalf("seed membership: %v", err)
+	}
+	if err := backfillAwayPeriods(db.DB); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+
+	count := func(where string) int {
+		t.Helper()
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM away_periods ` + where).Scan(&n); err != nil {
+			t.Fatalf("count: %v", err)
+		}
+		return n
+	}
+
+	if got := count(""); got != 1 {
+		t.Fatalf("after the first upgrade: %d period(s), want 1", got)
+	}
+
+	// She comes back, which closes the period rather than deleting it.
+	if _, err := db.Exec(`UPDATE away_periods SET ended_at = datetime('now') WHERE ended_at IS NULL`); err != nil {
+		t.Fatalf("return: %v", err)
+	}
+
+	// The server restarts. This is where the duplicate used to appear.
+	if err := backfillAwayPeriods(db.DB); err != nil {
+		t.Fatalf("second backfill: %v", err)
+	}
+	if got := count(""); got != 1 {
+		t.Errorf("after a restart following her return: %d period(s), want 1 — the absence was recorded twice", got)
+	}
+	if got := count(`WHERE ended_at IS NULL`); got != 0 {
+		t.Errorf("she is back, but %d period(s) are still open", got)
+	}
+	db.Close()
+}

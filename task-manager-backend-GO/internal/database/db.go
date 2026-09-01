@@ -286,9 +286,15 @@ func migrate(db *sql.DB) error {
 // two-column scheme into away_periods, once.
 //
 // Without it, upgrading would silently un-away everybody: the new code reads
-// periods, the old rows hold columns, and nobody would be told. Idempotent by
-// construction — it only fires for a member who has the old flag set and no
-// open period to match it.
+// periods, the old rows hold columns, and nobody would be told.
+//
+// It clears the old columns as it goes, and that is the whole of what makes it
+// run once. An earlier version skipped members who already had an *open*
+// period, which looks idempotent and is not: once that member came back the
+// period closed, the stale column still said "away", and the next restart
+// inserted a second record for the same absence. Two overlapping periods then
+// double-count in F6's away-days arithmetic — which showed up as one member
+// being "away 11 days" for a five-day trip.
 func backfillAwayPeriods(db *sql.DB) error {
 	hasOldColumn, err := columnExists(db, "group_members", "away_since")
 	if err != nil {
@@ -298,16 +304,27 @@ func backfillAwayPeriods(db *sql.DB) error {
 		return nil
 	}
 
-	_, err = db.Exec(`
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`
 		INSERT INTO away_periods (id, group_id, user_id, started_at, ends_at, ended_at)
 		SELECT lower(hex(randomblob(16))), gm.group_id, gm.user_id, gm.away_since, gm.away_until, NULL
 		FROM group_members gm
-		WHERE gm.away_since IS NOT NULL
-		  AND NOT EXISTS (
-			SELECT 1 FROM away_periods ap
-			WHERE ap.group_id = gm.group_id AND ap.user_id = gm.user_id AND ap.ended_at IS NULL
-		  )`)
-	return err
+		WHERE gm.away_since IS NOT NULL`); err != nil {
+		return err
+	}
+	// Consumed. The columns are dead from here on, and clearing them is what
+	// stops this ever firing again for the same absence.
+	if _, err := tx.Exec(
+		`UPDATE group_members SET away_since = NULL, away_until = NULL WHERE away_since IS NOT NULL`,
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // addMissingColumns applies ALTER TABLE ADD COLUMN for columns introduced after
