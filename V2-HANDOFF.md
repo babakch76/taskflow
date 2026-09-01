@@ -39,13 +39,18 @@ that bite in code:
 Repo: `D:\0A-study-A0\0-ACSAI-0\sem 6\HCI\Antigravity workspace`
 GitHub: `babakch76/taskflow` (**private**), branch `main`.
 
-Last three commits:
+Where the history stands (this table was written at F1 and is kept as a map,
+not as a tip — read `git log` for the tip):
 
 | Commit | What |
 |---|---|
+| `7d8798e` | **Merge `v2-chores`** — F1 to F6 on `main`. The pre-v2 demo is the tag `v1-final`. |
 | `4e323dc` | **F1 — the Board** |
 | `b22bbc0` | Removed the manager role and the deadline permission gate |
 | `77c541e` | Release signing + "Producing an APK" docs |
+
+Since the merge: B-6, B-7 and B-8 closed on `main`, and the UI cleanup pass
+(`taskflow_ui_cleanup_prompt.md`) is running on `ui-cleanup`.
 
 ### Done
 
@@ -170,8 +175,11 @@ What is left is not features:
    security group still blocks SSH. `migrate()` has been exercised against a
    populated database at every step, including two backfills, so the deploy
    itself should be uneventful.
-2. **Merge `v2-chores` into `main`**, once the deployed build is confirmed.
-   `main` still holds the pre-v2 demo deliberately.
+2. ~~**Merge `v2-chores` into `main`**~~ — **done** (`7d8798e`), ahead of the
+   deploy rather than after it. The pre-v2 demo stays reachable as the tag
+   `v1-final`, which is what keeping `main` unmerged was protecting. Work since
+   then goes on a branch off `main` for the same reason: the UI cleanup pass is
+   on `ui-cleanup`.
 3. **The report.** The non-goals in the spec's "considered and rejected" section
    are worth keeping, and several decisions here were deliberate departures
    worth naming — the interval departure in section 2, and the reading of
