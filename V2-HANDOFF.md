@@ -53,7 +53,15 @@ not as a tip — read `git log` for the tip):
 | `77c541e` | Release signing + "Producing an APK" docs |
 
 Since the merge: B-6, B-7 and B-8 closed on `main`, and the UI cleanup pass
-(`taskflow_ui_cleanup_prompt.md`) is running on `ui-cleanup`.
+(`taskflow_ui_cleanup_prompt.md`) ran on **`ui-cleanup`**, which is where the
+tip is now. Phases 1 to 4a are done and device-verified — constraint 3 cleaned
+up on the legacy task path, dynamic colour off, the two create dialogs merged
+into one, the Calendar tab deleted, quiet hours moved to the Dashboard, an away
+banner on the board, the tab count fixed, and the simplifications written down
+in 5a. **Phase 4b — retaking every screenshot in `TaskFlow_Screens.pptx` from
+the real build — is the only piece left, and it needs Babak at the emulator.**
+The branch has not been merged into `main`; that is a decision, not an
+oversight waiting to be corrected.
 
 ### Done
 
