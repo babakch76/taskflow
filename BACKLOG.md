@@ -72,8 +72,11 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
   occurrence detail, and "What's been done" in the group's overflow menu.
 - **The spec's build order is complete** — F1 through F6. What remains is
   deployment (see the handoff) and whatever the report needs.
-- Multi-select and bulk status were removed with F1. The backend endpoint
-  survives, unused by the client.
+- Multi-select and bulk status were removed with F1, and the backend endpoint
+  behind them is **now gone too** — nothing had called it since, and the
+  ViewModel wrapper was unreachable from any screen. The
+  `tasks_bulk_updated` activity constant and the client's rendering of it stay,
+  because rows written before the removal still carry it.
 
 ---
 

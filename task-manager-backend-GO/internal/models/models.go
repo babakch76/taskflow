@@ -339,13 +339,6 @@ type UpdateTaskRequest struct {
 	DueDate     NullableField `json:"due_date"`
 }
 
-// BulkUpdateTaskStatusRequest backs the multi-select UI: one status applied to
-// a set of tasks in a single round trip and a single transaction.
-type BulkUpdateTaskStatusRequest struct {
-	TaskIDs []string `json:"task_ids"`
-	Status  string   `json:"status"`
-}
-
 // CreateChoreRequest defines a chore and, implicitly, its first occurrence.
 //
 // Rotation must contain at least one member: an occurrence always has exactly

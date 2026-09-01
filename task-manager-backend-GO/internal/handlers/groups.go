@@ -458,7 +458,11 @@ func (h *GroupHandler) InviteByUsername(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// TODO: trigger push notification to targetID here
+	// No push notification here, and none planned. The invited user's Dashboard
+	// polls GET /invites while it is resumed, which is how an invite surfaces
+	// (B-2). F3 settled the wider question the same way: reminders are scheduled
+	// on the device, so this project has no push channel at all and adding one
+	// for invites alone would not pay for itself.
 	jsonResponse(w, http.StatusCreated, invite)
 }
 

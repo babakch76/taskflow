@@ -411,19 +411,6 @@ data class UpdateTaskRequest(
 )
 
 /**
- * Body for PATCH /groups/{group_id}/tasks — one status applied to a set of
- * tasks in a single round trip. Backs the multi-select UI.
- *
- * No [Patchable] fields here: both keys are always sent, and the backend
- * rejects an empty [taskIds] with 400.
- */
-data class BulkUpdateTaskStatusRequest(
-    @SerializedName("task_ids")
-    val taskIds: List<String>,
-    val status: String,   // "todo", "in_progress", "done"
-)
-
-/**
  * Body for POST /groups/{group_id}/chores.
  *
  * [rotation] must hold at least one member — an occurrence always has exactly

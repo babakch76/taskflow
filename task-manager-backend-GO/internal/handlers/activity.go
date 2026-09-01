@@ -14,9 +14,13 @@ import (
 // Event types written to activity_events. Clients switch on these strings, so
 // treat them as part of the API contract.
 const (
-	EventTaskCreated      = "task_created"
-	EventTaskUpdated      = "task_updated"
-	EventTaskDeleted      = "task_deleted"
+	EventTaskCreated = "task_created"
+	EventTaskUpdated = "task_updated"
+	EventTaskDeleted = "task_deleted"
+	// No longer emitted — multi-select went with F1, and the bulk endpoint
+	// behind it was removed once the build order was finished and nothing had
+	// called it since. Kept because rows written before that still carry the
+	// value, and the client still renders them.
 	EventTasksBulkUpdated = "tasks_bulk_updated"
 	// The chore model (F2). Chore create/edit/delete are group-visible changes
 	// and are broadcast, per constraint 7.

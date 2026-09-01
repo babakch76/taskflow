@@ -124,7 +124,7 @@ happens when the board is read.
 | Fate of `tasks` | **Answered:** chores/occurrences sit alongside it. Existing tasks stay as one-offs. Nothing migrated, nothing lost. |
 | F2 slicing | **Answered:** three commits — model+CRUD+board, spawning, turn rule. Done. |
 | Interval periods | Any number of days, 1-365, not the spec's enumerated set. See the departure note above. |
-| The bulk endpoint | Still there, still tested, still unused by the client. Left alone through F2; delete it when something else touches that file. |
+| The bulk endpoint | **Deleted** once the build order finished. It had been unreachable from the UI since F1 and nothing had claimed it in the meantime. The activity constant and its rendering stay, for rows already written. |
 
 ---
 

@@ -118,16 +118,6 @@ interface GroupApiService {
         @Body request: UpdateTaskRequest,
     ): Response<Task>
 
-    /**
-     * Apply one status to several tasks in a single transaction.
-     * Every id must belong to [groupId] or the whole call fails with 404.
-     */
-    @PATCH("groups/{group_id}/tasks")
-    suspend fun bulkUpdateTaskStatus(
-        @Path("group_id") groupId: String,
-        @Body request: BulkUpdateTaskStatusRequest,
-    ): Response<List<Task>>
-
     @DELETE("groups/{group_id}/tasks/{task_id}")
     suspend fun deleteTask(
         @Path("group_id") groupId: String,

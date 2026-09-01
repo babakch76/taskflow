@@ -4,7 +4,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.taskflow.app.data.model.ActivityEvent
-import com.taskflow.app.data.model.BulkUpdateTaskStatusRequest
 import com.taskflow.app.data.model.Chore
 import com.taskflow.app.data.model.ChoreHistory
 import com.taskflow.app.data.model.CreateChoreRequest
@@ -305,18 +304,6 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
         val note = if (dueDateIso == null) "Deadline removed" else "Deadline set"
         runAction(successMessage = note) {
             api.updateTask(groupId, taskId, UpdateTaskRequest(dueDate = due))
-        }
-    }
-
-    /** Multi-select: one status for many tasks, in a single backend transaction. */
-    fun bulkSetStatus(taskIds: Set<String>, status: String) {
-        if (taskIds.isEmpty()) return
-        val note = if (taskIds.size == 1) "1 task moved" else "${taskIds.size} tasks moved"
-        runAction(successMessage = note) {
-            api.bulkUpdateTaskStatus(
-                groupId,
-                BulkUpdateTaskStatusRequest(taskIds = taskIds.toList(), status = status),
-            )
         }
     }
 
