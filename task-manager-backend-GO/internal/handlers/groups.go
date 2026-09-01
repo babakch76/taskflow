@@ -162,12 +162,17 @@ func (h *GroupHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
 	// claim visible to everyone instead, and lets the household do the rest.
 	rows, err := h.DB.Query(`
 		SELECT u.id, u.username, u.email, gm.role, gm.joined_at,
-		       gm.away_since, gm.away_until
+		       ap.started_at, ap.ends_at
 		FROM group_members gm
 		JOIN users u ON u.id = gm.user_id
+		LEFT JOIN away_periods ap
+		       ON ap.group_id = gm.group_id
+		      AND ap.user_id = gm.user_id
+		      AND ap.ended_at IS NULL
+		      AND (ap.ends_at IS NULL OR ap.ends_at > ?)
 		WHERE gm.group_id = ?
 		ORDER BY gm.joined_at
-	`, groupID)
+	`, time.Now().UTC(), groupID)
 	if err != nil {
 		jsonError(w, "internal error", http.StatusInternalServerError)
 		return
@@ -235,14 +240,16 @@ func (h *GroupHandler) SetAway(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	now := time.Now().UTC()
+
 	if !req.Away {
-		// Coming back. Both ends are cleared, so a returning member is
-		// indistinguishable from one who was never away — there is no debt to
-		// carry forward and nothing to remember.
+		// Coming back closes the period rather than erasing it. The absence
+		// still happened, and F6 has to be able to say so — a completion count
+		// that dips for three weeks with no explanation reads as flaking.
 		if _, err := h.DB.Exec(
-			`UPDATE group_members SET away_since = NULL, away_until = NULL
-			 WHERE group_id = ? AND user_id = ?`,
-			groupID, userID,
+			`UPDATE away_periods SET ended_at = ?
+			 WHERE group_id = ? AND user_id = ? AND ended_at IS NULL`,
+			now, groupID, userID,
 		); err != nil {
 			jsonError(w, "internal error", http.StatusInternalServerError)
 			return
@@ -268,10 +275,20 @@ func (h *GroupHandler) SetAway(w http.ResponseWriter, r *http.Request) {
 		until = &parsed
 	}
 
+	// Close any period still open before starting a new one, so declaring away
+	// twice cannot leave two overlapping records for one person.
 	if _, err := h.DB.Exec(
-		`UPDATE group_members SET away_since = ?, away_until = ?
-		 WHERE group_id = ? AND user_id = ?`,
-		time.Now().UTC(), until, groupID, userID,
+		`UPDATE away_periods SET ended_at = ?
+		 WHERE group_id = ? AND user_id = ? AND ended_at IS NULL`,
+		now, groupID, userID,
+	); err != nil {
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if _, err := h.DB.Exec(
+		`INSERT INTO away_periods (id, group_id, user_id, started_at, ends_at)
+		 VALUES (?,?,?,?,?)`,
+		uuid.New().String(), groupID, userID, now, until,
 	); err != nil {
 		jsonError(w, "internal error", http.StatusInternalServerError)
 		return

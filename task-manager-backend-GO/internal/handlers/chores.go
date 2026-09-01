@@ -984,12 +984,13 @@ func nextInRotation(rotation []string, current string, away map[string]bool) str
 // A finished away period needs no cleanup: away_until simply stops being in the
 // future, and the row stops matching. People come back on their own.
 func (h *ChoreHandler) awayMembers(groupID string) (map[string]bool, error) {
+	now := time.Now().UTC()
 	rows, err := h.DB.Query(`
-		SELECT user_id FROM group_members
+		SELECT DISTINCT user_id FROM away_periods
 		WHERE group_id = ?
-		  AND away_since IS NOT NULL
-		  AND (away_until IS NULL OR away_until > ?)`,
-		groupID, time.Now().UTC(),
+		  AND ended_at IS NULL
+		  AND (ends_at IS NULL OR ends_at > ?)`,
+		groupID, now,
 	)
 	if err != nil {
 		return nil, err

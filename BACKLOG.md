@@ -59,10 +59,14 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
   yours, and an away toggle in the group's overflow menu whose dialog states the
   rule the app cannot enforce and points at busy as the alternative. Away shows
   on the member list and beside names in every rotation picker.
-- **F6 (history) — NEXT** and the last feature in the build order. Read-only
-  queries over records that are already persisted: per chore (a timeline of
-  completions) and per person (completions in a window, counting done_by so
-  covering counts for the coverer). No points, ranks, streaks or comparisons.
+- **F6 (history) — IN PROGRESS**, the last feature in the build order. It began
+  with a correction rather than a view: away was stored as a *current flag*, so
+  a past absence was unrecoverable — and the per-person view counts completions
+  over a window, where an unexplained dip reads as exactly the flaking the spec
+  forbids. Away is now an `away_periods` record, closed rather than erased on
+  return, with a one-time backfill so upgrading doesn't silently un-away anyone.
+  Still to come: the two read-only views (per chore, per person) and their
+  client screens.
 - Multi-select and bulk status were removed with F1. The backend endpoint
   survives, unused by the client.
 

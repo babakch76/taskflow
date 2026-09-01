@@ -221,6 +221,30 @@ func migrate(db *sql.DB) error {
 		CHECK (status = 'done' OR done_by IS NULL)
 	);
 
+	-- Away, as a record rather than a flag (F5, needed properly by F6).
+	--
+	-- The first cut kept away on group_members as two columns, which answers
+	-- "is this person away now" and nothing else. History has to answer "were
+	-- they away *then*", because the per-person view counts completions over a
+	-- window and a low count with no explanation is exactly the reading the
+	-- spec exists to prevent: absence must never look like flaking.
+	--
+	-- Three timestamps, because "until" and "came back" are different facts:
+	--   started_at — when they left
+	--   ends_at    — when they said they would be back; NULL for open-ended
+	--   ended_at   — when they actually returned, if they said so explicitly
+	--
+	-- A period is over at the earliest of ended_at and ends_at. Someone who
+	-- said "a week" and came back in three days has a three-day period.
+	CREATE TABLE IF NOT EXISTS away_periods (
+		id         TEXT PRIMARY KEY,
+		group_id   TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+		user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		started_at DATETIME NOT NULL,
+		ends_at    DATETIME,
+		ended_at   DATETIME
+	);
+
 	CREATE TABLE IF NOT EXISTS activity_events (
 		id         TEXT PRIMARY KEY,
 		group_id   TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
@@ -243,6 +267,7 @@ func migrate(db *sql.DB) error {
 	-- The board query: every occurrence in a group, open ones first.
 	CREATE INDEX IF NOT EXISTS idx_occurrences_group     ON occurrences(group_id, status);
 	CREATE INDEX IF NOT EXISTS idx_occurrences_chore     ON occurrences(chore_id);
+	CREATE INDEX IF NOT EXISTS idx_away_group_user       ON away_periods(group_id, user_id);
 	`
 	if _, err := db.Exec(schema); err != nil {
 		return err
@@ -251,7 +276,38 @@ func migrate(db *sql.DB) error {
 	// CREATE TABLE IF NOT EXISTS is a no-op on a database that already has the
 	// table, so columns added after the fact need their own step. Run them
 	// after the schema block, and make them idempotent.
-	return addMissingColumns(db)
+	if err := addMissingColumns(db); err != nil {
+		return err
+	}
+	return backfillAwayPeriods(db)
+}
+
+// backfillAwayPeriods moves anyone currently marked away under the old
+// two-column scheme into away_periods, once.
+//
+// Without it, upgrading would silently un-away everybody: the new code reads
+// periods, the old rows hold columns, and nobody would be told. Idempotent by
+// construction — it only fires for a member who has the old flag set and no
+// open period to match it.
+func backfillAwayPeriods(db *sql.DB) error {
+	hasOldColumn, err := columnExists(db, "group_members", "away_since")
+	if err != nil {
+		return err
+	}
+	if !hasOldColumn {
+		return nil
+	}
+
+	_, err = db.Exec(`
+		INSERT INTO away_periods (id, group_id, user_id, started_at, ends_at, ended_at)
+		SELECT lower(hex(randomblob(16))), gm.group_id, gm.user_id, gm.away_since, gm.away_until, NULL
+		FROM group_members gm
+		WHERE gm.away_since IS NOT NULL
+		  AND NOT EXISTS (
+			SELECT 1 FROM away_periods ap
+			WHERE ap.group_id = gm.group_id AND ap.user_id = gm.user_id AND ap.ended_at IS NULL
+		  )`)
+	return err
 }
 
 // addMissingColumns applies ALTER TABLE ADD COLUMN for columns introduced after
@@ -283,6 +339,10 @@ func addMissingColumns(db *sql.DB) error {
 		// F3. A literal is a constant default, so unlike updated_at these can be
 		// added NOT NULL and existing users get the standard window rather than
 		// a NULL that every caller would have to interpret.
+		// Superseded by away_periods, which records absences rather than only
+		// the current one. Kept so backfillAwayPeriods still has something to
+		// read on a database written by the version in between, and because
+		// dropping a column rewrites the table for no gain. Nothing reads them.
 		{table: "group_members", name: "away_since", ddl: `ALTER TABLE group_members ADD COLUMN away_since DATETIME`},
 		{table: "group_members", name: "away_until", ddl: `ALTER TABLE group_members ADD COLUMN away_until DATETIME`},
 		{table: "occurrences", name: "passed_from", ddl: `ALTER TABLE occurrences ADD COLUMN passed_from TEXT REFERENCES users(id)`},

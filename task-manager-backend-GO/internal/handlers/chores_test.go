@@ -10,6 +10,8 @@ import (
 
 	"task-manager-backend/internal/database"
 	"task-manager-backend/internal/models"
+
+	"github.com/google/uuid"
 )
 
 // --- helpers ----------------------------------------------------------------
@@ -1269,7 +1271,7 @@ func TestPassingWritesNoActivityEvent(t *testing.T) {
 
 // --- F5: away ---------------------------------------------------------------
 
-// setAway marks a member away in a group, optionally until a given time.
+// setAway opens an away period for a member, optionally with a planned end.
 func setAway(t *testing.T, db *database.DB, groupID, userID string, until *time.Time) {
 	t.Helper()
 	var untilArg any
@@ -1277,8 +1279,8 @@ func setAway(t *testing.T, db *database.DB, groupID, userID string, until *time.
 		untilArg = until.UTC()
 	}
 	if _, err := db.Exec(
-		`UPDATE group_members SET away_since = ?, away_until = ? WHERE group_id = ? AND user_id = ?`,
-		time.Now().UTC(), untilArg, groupID, userID,
+		`INSERT INTO away_periods (id, group_id, user_id, started_at, ends_at) VALUES (?,?,?,?,?)`,
+		uuid.New().String(), groupID, userID, time.Now().UTC(), untilArg,
 	); err != nil {
 		t.Fatalf("set away: %v", err)
 	}
@@ -1337,11 +1339,13 @@ func TestAwayMembersAreSkippedAndReturnInPlace(t *testing.T) {
 	}
 }
 
+// setAwayBack closes the open period rather than deleting it — the absence
+// still happened, and F6 needs to be able to say so.
 func setAwayBack(t *testing.T, db *database.DB, groupID, userID string) {
 	t.Helper()
 	if _, err := db.Exec(
-		`UPDATE group_members SET away_since = NULL, away_until = NULL WHERE group_id = ? AND user_id = ?`,
-		groupID, userID,
+		`UPDATE away_periods SET ended_at = ? WHERE group_id = ? AND user_id = ? AND ended_at IS NULL`,
+		time.Now().UTC(), groupID, userID,
 	); err != nil {
 		t.Fatalf("clear away: %v", err)
 	}
@@ -1441,6 +1445,73 @@ func TestEveryoneAwayStillLeavesTheChoreWithSomebody(t *testing.T) {
 	}
 	if next[0].AssignedTo != bo {
 		t.Errorf("assigned to %s, want the person whose turn it would have been (bo)", next[0].AssignedTo)
+	}
+}
+
+// Coming back closes the period; it does not erase it.
+//
+// This is the whole reason away is a record rather than a flag. F6's
+// per-person view counts completions over a window, and somebody who was away
+// for three weeks shows a number near zero. Without the absence on file there
+// is nothing to explain it with, and a low count with no explanation is exactly
+// the reading the spec exists to prevent.
+func TestReturningLeavesTheAbsenceOnRecord(t *testing.T) {
+	db := newTestDB(t)
+	ann := newUser(t, db, "ann")
+	groupID := newGroup(t, db, ann, "Flat")
+
+	setAway(t, db, groupID, ann, nil)
+	setAwayBack(t, db, groupID, ann)
+
+	var periods, open int
+	db.QueryRow(`SELECT COUNT(*) FROM away_periods WHERE group_id = ? AND user_id = ?`,
+		groupID, ann).Scan(&periods)
+	db.QueryRow(`SELECT COUNT(*) FROM away_periods WHERE group_id = ? AND user_id = ? AND ended_at IS NULL`,
+		groupID, ann).Scan(&open)
+
+	if periods != 1 {
+		t.Errorf("expected the absence to survive the return, found %d period(s)", periods)
+	}
+	if open != 0 {
+		t.Errorf("the period should be closed, found %d still open", open)
+	}
+
+	// And they are back in the rotation.
+	away, err := (&ChoreHandler{DB: db}).awayMembers(groupID)
+	if err != nil {
+		t.Fatalf("awayMembers: %v", err)
+	}
+	if away[ann] {
+		t.Error("ann still reads as away after returning")
+	}
+}
+
+// Declaring away twice must not leave two overlapping records for one person,
+// or any window arithmetic over them double-counts the same absence.
+func TestDeclaringAwayTwiceLeavesOneOpenPeriod(t *testing.T) {
+	db := newTestDB(t)
+	ann := newUser(t, db, "ann")
+	groupID := newGroup(t, db, ann, "Flat")
+	h := &GroupHandler{DB: db}
+
+	away := func(body string) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		h.SetAway(rec, request("PUT", "/groups/"+groupID+"/members/me/away", body, ann,
+			map[string]string{"group_id": groupID}))
+		if rec.Code != 200 {
+			t.Fatalf("set away: got %d (%s)", rec.Code, rec.Body.String())
+		}
+	}
+
+	away(`{"away":true}`)
+	away(`{"away":true}`)
+
+	var open int
+	db.QueryRow(`SELECT COUNT(*) FROM away_periods WHERE group_id = ? AND user_id = ? AND ended_at IS NULL`,
+		groupID, ann).Scan(&open)
+	if open != 1 {
+		t.Errorf("expected exactly one open period, got %d", open)
 	}
 }
 
