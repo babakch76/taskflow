@@ -202,8 +202,17 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
 
     // ─── Tasks ──────────────────────────────────────────────────
 
-    fun createTask(title: String, description: String, assignedTo: String?) {
-        runAction(successMessage = "Task added") {
+    /**
+     * [onResult] lets the dialog stay open until the write lands: null on
+     * success (close it), otherwise the message to show inside it.
+     */
+    fun createTask(
+        title: String,
+        description: String,
+        assignedTo: String?,
+        onResult: (String?) -> Unit = {},
+    ) {
+        runAction(successMessage = "Task added", onResult = onResult) {
             api.createTask(
                 groupId,
                 CreateTaskRequest(
@@ -377,8 +386,9 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
         intervalDays: Int?,
         fixedWeekdays: List<Int>?,
         rotation: List<String>,
+        onResult: (String?) -> Unit = {},
     ) {
-        runAction(successMessage = "Chore added") {
+        runAction(successMessage = "Chore added", onResult = onResult) {
             api.createChore(
                 groupId,
                 CreateChoreRequest(
@@ -446,8 +456,21 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
         runAction(successMessage = "Chore deleted") { api.deleteChore(groupId, choreId) }
     }
 
+    /**
+     * Runs one mutation, then refreshes what it may have changed.
+     *
+     * [onResult] reports the outcome back to a caller that owns a form: null on
+     * success, otherwise the message to show. A form needs this because it must
+     * stay open until the write actually lands — closing first and reporting
+     * afterwards throws away everything the user typed (B-7).
+     *
+     * When [onResult] is given, a failure is *not* also put in [message]: the
+     * caller is showing it in the form, and a snackbar saying the same thing
+     * from behind the dialog is just noise.
+     */
     private fun runAction(
         successMessage: String? = null,
+        onResult: ((String?) -> Unit)? = null,
         block: suspend () -> Response<*>,
     ) {
         viewModelScope.launch {
@@ -458,14 +481,22 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
                     refreshTasksAndProgress()
                     reloadActivityFromScratch()
                     _uiState.value = _uiState.value.copy(isWorking = false, message = successMessage)
+                    onResult?.invoke(null)
                 } else {
+                    val failure = ApiErrors.messageFor(response)
                     _uiState.value = _uiState.value.copy(
                         isWorking = false,
-                        message = ApiErrors.messageFor(response),
+                        message = if (onResult == null) failure else null,
                     )
+                    onResult?.invoke(failure)
                 }
             } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(isWorking = false, message = networkMessage(e))
+                val failure = networkMessage(e)
+                _uiState.value = _uiState.value.copy(
+                    isWorking = false,
+                    message = if (onResult == null) failure else null,
+                )
+                onResult?.invoke(failure)
             }
         }
     }

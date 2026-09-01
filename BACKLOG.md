@@ -69,7 +69,22 @@ replaces its whole set each time, so feeding it more occurrences is enough.
 
 ---
 
-### B-7 · A rejected create closes the dialog and loses what you typed — OPEN
+### B-7 · A rejected create closes the dialog and loses what you typed — DONE (2026-09-01)
+
+**Fixed:** both create dialogs now stay open until the write actually lands.
+`runAction` takes an optional result callback; the screen closes the dialog on
+success and, on failure, shows the message in the dialog's own error slot with
+every field still filled. Create reads "Creating…" and is disabled while the
+request is in flight, and Cancel is disabled with it so the form cannot be
+dismissed out from under a pending write. A failure routed to a form no longer
+also raises a snackbar — one message, where the user is looking.
+
+Verified by filling the chore form, killing the backend, and pressing Create:
+the dialog stayed up with "Network error: Failed to connect to /10.0.2.2:8080"
+and the name, schedule and rotation all intact. Restarting the server and
+pressing Create again submitted the same form successfully.
+
+Original report follows.
 
 **Reported:** 2026-08-31, hit while testing chore creation against a stale
 server binary.

@@ -99,6 +99,13 @@ fun GroupDetailScreen(
     var showCreateTask by remember { mutableStateOf(false) }
     var showCreateChore by remember { mutableStateOf(false) }
     var showQuietHours by remember { mutableStateOf(false) }
+
+    // Per-form submit state, so a create dialog can stay open until the write
+    // lands and show a rejection where the user is already looking (B-7).
+    var taskSubmitting by remember { mutableStateOf(false) }
+    var taskError by remember { mutableStateOf<String?>(null) }
+    var choreSubmitting by remember { mutableStateOf(false) }
+    var choreError by remember { mutableStateOf<String?>(null) }
     var showInvite by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
     var confirmLeave by remember { mutableStateOf(false) }
@@ -392,10 +399,18 @@ fun GroupDetailScreen(
     if (showCreateTask) {
         CreateTaskDialog(
             members = state.members,
-            onDismiss = { showCreateTask = false },
+            submitting = taskSubmitting,
+            serverError = taskError,
+            onDismiss = { showCreateTask = false; taskError = null },
             onCreate = { title, desc, assignee ->
-                showCreateTask = false
-                viewModel.createTask(title, desc, assignee)
+                // The dialog stays up until the write lands. Closing first and
+                // reporting afterwards threw away everything typed into it.
+                taskSubmitting = true
+                taskError = null
+                viewModel.createTask(title, desc, assignee) { failure ->
+                    taskSubmitting = false
+                    if (failure == null) showCreateTask = false else taskError = failure
+                }
             },
         )
     }
@@ -403,10 +418,18 @@ fun GroupDetailScreen(
     if (showCreateChore) {
         CreateChoreDialog(
             members = state.members,
-            onDismiss = { showCreateChore = false },
+            submitting = choreSubmitting,
+            serverError = choreError,
+            onDismiss = { showCreateChore = false; choreError = null },
             onCreate = { name, doneLine, scheduleType, intervalDays, weekdays, rotation ->
-                showCreateChore = false
-                viewModel.createChore(name, doneLine, scheduleType, intervalDays, weekdays, rotation)
+                choreSubmitting = true
+                choreError = null
+                viewModel.createChore(
+                    name, doneLine, scheduleType, intervalDays, weekdays, rotation,
+                ) { failure ->
+                    choreSubmitting = false
+                    if (failure == null) showCreateChore = false else choreError = failure
+                }
             },
         )
     }
@@ -1666,6 +1689,8 @@ private fun QuietHoursDialog(
 @Composable
 private fun CreateChoreDialog(
     members: List<MemberInfo>,
+    submitting: Boolean,
+    serverError: String?,
     onDismiss: () -> Unit,
     onCreate: (
         name: String,
@@ -1698,9 +1723,14 @@ private fun CreateChoreDialog(
                 // At the top, not the bottom: this form is taller than the
                 // dialog, and an error under the fold is not feedback — the
                 // button just appears to do nothing.
-                AnimatedVisibility(visible = error != null) {
+                //
+                // The local check wins over the server's: if the user has just
+                // typed something invalid, that is the more useful message, and
+                // the rejection they are reading refers to what they sent last.
+                val shown = error ?: serverError
+                AnimatedVisibility(visible = shown != null) {
                     Text(
-                        text = error ?: "",
+                        text = shown ?: "",
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -1879,9 +1909,15 @@ private fun CreateChoreDialog(
                     if (scheduleType == ScheduleType.FIXED_DATE) listOf(weekday) else null,
                     rotation.toList(),
                 )
-            }) { Text("Create") }
+                // Deliberately not closing here — the caller closes it once the
+                // write has actually landed.
+            }, enabled = !submitting) {
+                Text(if (submitting) "Creating…" else "Create")
+            }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !submitting) { Text("Cancel") }
+        },
     )
 }
 
@@ -1889,6 +1925,8 @@ private fun CreateChoreDialog(
 @Composable
 private fun CreateTaskDialog(
     members: List<MemberInfo>,
+    submitting: Boolean,
+    serverError: String?,
     onDismiss: () -> Unit,
     onCreate: (String, String, String?) -> Unit,
 ) {
@@ -1944,9 +1982,10 @@ private fun CreateTaskDialog(
                         }
                     }
                 }
-                AnimatedVisibility(visible = error != null) {
+                val shown = error ?: serverError
+                AnimatedVisibility(visible = shown != null) {
                     Text(
-                        text = error ?: "",
+                        text = shown ?: "",
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -1959,10 +1998,15 @@ private fun CreateTaskDialog(
                     error = "Title is required"
                     return@Button
                 }
+                // The caller closes this once the write has landed, not here.
                 onCreate(title, description, assignee?.id)
-            }) { Text("Create") }
+            }, enabled = !submitting) {
+                Text(if (submitting) "Creating…" else "Create")
+            }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !submitting) { Text("Cancel") }
+        },
     )
 }
 
