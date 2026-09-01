@@ -77,6 +77,7 @@ object ReminderScheduler {
      */
     fun reschedule(
         context: Context,
+        groupId: String,
         occurrences: List<Occurrence>,
         chores: List<Chore>,
         myUserId: String?,
@@ -124,6 +125,7 @@ object ReminderScheduler {
 
                 pending += PendingReminder(
                     occurrenceId = adjusted.occurrenceId,
+                    groupId = groupId,
                     kind = adjusted.kind,
                     choreName = occurrence.choreName,
                     atEpochMillis = adjusted.at.toInstant().toEpochMilli(),
@@ -139,6 +141,7 @@ object ReminderScheduler {
             )?.let { nudge ->
                 pending += PendingReminder(
                     occurrenceId = nudge.occurrenceId,
+                    groupId = groupId,
                     kind = nudge.kind,
                     choreName = occurrence.choreName,
                     atEpochMillis = nudge.at.toInstant().toEpochMilli(),
@@ -149,11 +152,16 @@ object ReminderScheduler {
         // Anything for an occurrence that is no longer mine and open — done,
         // passed on, or deleted — must stop. Cancelling before arming keeps
         // this a full replacement rather than an accumulation.
-        cancelAll(context, store.pending())
-        store.savePending(pending)
+        //
+        // Scoped to this group, which matters as soon as more than one screen
+        // calls in: the board knows about one group, the dashboard about all of
+        // them, and a global replace would mean whichever ran last silently
+        // cancelled the other's alarms (B-8).
+        cancelAll(context, store.pendingFor(groupId))
+        store.savePending(groupId, pending)
         arm(context, pending)
 
-        Log.d(TAG, "armed ${pending.size} reminder(s) for ${mine.size} open occurrence(s)")
+        Log.d(TAG, "armed ${pending.size} reminder(s) for ${mine.size} open occurrence(s) in $groupId")
     }
 
     /** Re-arms whatever was already stored. Used after a reboot. */
@@ -215,9 +223,15 @@ object ReminderScheduler {
     }
 }
 
-/** One armed alarm, in the form that survives a reboot. */
+/**
+ * One armed alarm, in the form that survives a reboot.
+ *
+ * [groupId] is carried so a reschedule can replace one group's alarms without
+ * disturbing another's.
+ */
 data class PendingReminder(
     val occurrenceId: String,
+    val groupId: String,
     val kind: ReminderSchedule.Kind,
     val choreName: String,
     val atEpochMillis: Long,
@@ -227,6 +241,7 @@ data class PendingReminder(
 
     fun toJson(): JSONObject = JSONObject().apply {
         put("occurrence_id", occurrenceId)
+        put("group_id", groupId)
         put("kind", kind.name)
         put("chore_name", choreName)
         put("at", atEpochMillis)
@@ -236,6 +251,10 @@ data class PendingReminder(
         fun fromJson(o: JSONObject): PendingReminder? = runCatching {
             PendingReminder(
                 occurrenceId = o.getString("occurrence_id"),
+                // Tolerated as blank for anything written before groups were
+                // tracked; such an entry simply belongs to no group and is
+                // replaced the first time its real group reschedules.
+                groupId = o.optString("group_id"),
                 kind = ReminderSchedule.Kind.valueOf(o.getString("kind")),
                 choreName = o.optString("chore_name"),
                 atEpochMillis = o.getLong("at"),
@@ -276,6 +295,7 @@ class ReminderStore(context: Context) {
         prefs.edit().putLong(nudgeKey(occurrenceId), at.toInstant().toEpochMilli()).apply()
     }
 
+    /** Every armed reminder, across all groups. */
     fun pending(): List<PendingReminder> {
         val raw = prefs.getString(KEY_PENDING, null) ?: return emptyList()
         return runCatching {
@@ -284,9 +304,20 @@ class ReminderStore(context: Context) {
         }.getOrDefault(emptyList())
     }
 
-    fun savePending(reminders: List<PendingReminder>) {
+    fun pendingFor(groupId: String): List<PendingReminder> =
+        pending().filter { it.groupId == groupId }
+
+    /**
+     * Replaces one group's armed reminders, leaving every other group's alone.
+     *
+     * Whole-store replacement was fine while only the board scheduled. It is
+     * not once the dashboard schedules for every group as well — the two would
+     * take turns cancelling each other (B-8).
+     */
+    fun savePending(groupId: String, reminders: List<PendingReminder>) {
+        val others = pending().filter { it.groupId != groupId }
         val array = JSONArray()
-        reminders.forEach { array.put(it.toJson()) }
+        (others + reminders).forEach { array.put(it.toJson()) }
         prefs.edit().putString(KEY_PENDING, array.toString()).apply()
     }
 

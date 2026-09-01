@@ -162,6 +162,7 @@ fun GroupDetailScreen(
     LaunchedEffect(state.occurrences, state.chores, state.quietFrom, state.quietTo, myUserId) {
         ReminderScheduler.reschedule(
             context = context.applicationContext,
+            groupId = groupId,
             occurrences = state.occurrences,
             chores = state.chores,
             myUserId = myUserId,

@@ -2,12 +2,18 @@ package com.taskflow.app.ui.screens
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.taskflow.app.data.model.Chore
 import com.taskflow.app.data.model.Group
 import com.taskflow.app.data.model.InviteActionRequest
 import com.taskflow.app.data.model.InviteInfo
+import com.taskflow.app.data.model.Occurrence
 import com.taskflow.app.data.model.RedeemInviteRequest
 import com.taskflow.app.data.remote.ApiErrors
 import com.taskflow.app.data.remote.RetrofitClient
+import com.taskflow.app.reminders.QuietHours
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -102,6 +108,7 @@ class DashboardViewModel : ViewModel() {
                     if (!autoOpenLatched && groups.size == 1) {
                         _autoOpenGroupId.value = groups.first().id
                     }
+                    loadReminderData(groups)
                 } else {
                     _uiState.value = DashboardUiState.Error(ApiErrors.messageFor(response))
                 }
@@ -113,6 +120,60 @@ class DashboardViewModel : ViewModel() {
                 _isRefreshing.value = false
             }
         }
+    }
+
+    /**
+     * Everything one group needs for its reminders to be scheduled (F3, B-8).
+     */
+    data class GroupReminderData(
+        val groupId: String,
+        val occurrences: List<Occurrence>,
+        val chores: List<Chore>,
+    )
+
+    /**
+     * Board data for **every** group the user belongs to, plus their quiet
+     * hours — enough for the screen to arm reminders across all of them.
+     *
+     * The board can only ever schedule for the group you happen to have open,
+     * so a second household's turns went unmentioned until you visited it
+     * (B-8). The dashboard is the one place that sees them all.
+     */
+    private val _reminderData = MutableStateFlow<List<GroupReminderData>>(emptyList())
+    val reminderData: StateFlow<List<GroupReminderData>> = _reminderData.asStateFlow()
+
+    private val _quietHours = MutableStateFlow(QuietHours.DEFAULT)
+    val quietHours: StateFlow<QuietHours> = _quietHours.asStateFlow()
+
+    /**
+     * Fetches occurrences and chores for each group, in parallel.
+     *
+     * That is two requests per group — fine for a household app, where the
+     * number of groups is one or two, and the alternative is an aggregate
+     * endpoint that does not exist yet.
+     *
+     * Failures are silent by design. This drives reminders, not the screen: a
+     * group whose board could not be fetched simply keeps whatever alarms it
+     * already had, which is better than an error banner over a group list that
+     * loaded perfectly well.
+     */
+    private suspend fun loadReminderData(groups: List<Group>) = coroutineScope {
+        val me = runCatching { api.getMe() }.getOrNull()?.takeIf { it.isSuccessful }?.body()
+        _quietHours.value = QuietHours.parse(me?.quietFrom, me?.quietTo)
+
+        _reminderData.value = groups
+            .map { group ->
+                async {
+                    val occurrences = runCatching { api.listOccurrences(group.id) }
+                        .getOrNull()?.takeIf { it.isSuccessful }?.body()
+                    val chores = runCatching { api.listChores(group.id) }
+                        .getOrNull()?.takeIf { it.isSuccessful }?.body()
+                    if (occurrences == null) null
+                    else GroupReminderData(group.id, occurrences, chores.orEmpty())
+                }
+            }
+            .awaitAll()
+            .filterNotNull()
     }
 
     /**

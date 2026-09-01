@@ -47,7 +47,27 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
 
 ## Bugs
 
-### B-8 · Reminders only cover the group whose board you last opened — OPEN
+### B-8 · Reminders only cover the group whose board you last opened — DONE (2026-09-01)
+
+**Fixed:** the Dashboard now loads occurrences and chores for every group and
+arms reminders for all of them. It is the one screen that sees them all.
+
+The part that needed care: `reschedule` replaced the *whole* stored set, which
+was fine while only the board called it. With two callers, whichever ran last
+would have cancelled the other's alarms — a worse bug than the one being fixed,
+and a silent one. Reminders are now stored and replaced **per group**, so the
+board (one group) and the Dashboard (all of them) can both call in.
+
+Failures while loading are deliberately silent: this drives reminders, not the
+screen, and a group whose board could not be fetched keeps whatever alarms it
+already had rather than raising a banner over a group list that loaded fine.
+
+Verified with demo in two households: the Dashboard armed 2 reminders for one
+and 6 for the other, "Your turn: Water the plants" fired for the group whose
+board had never been opened, and opening one board left the other group's six
+untouched.
+
+Original report follows.
 
 **Reported:** 2026-09-01, while building F3.
 
