@@ -156,8 +156,13 @@ func (h *GroupHandler) ListMyGroups(w http.ResponseWriter, r *http.Request) {
 func (h *GroupHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
 	groupID := r.PathValue("group_id")
 
+	// Away is returned here because the spec makes it deliberately impossible to
+	// hide: it shows on the member list and anywhere a name appears in a
+	// rotation. The app cannot enforce that away means away — it makes the
+	// claim visible to everyone instead, and lets the household do the rest.
 	rows, err := h.DB.Query(`
-		SELECT u.id, u.username, u.email, gm.role, gm.joined_at
+		SELECT u.id, u.username, u.email, gm.role, gm.joined_at,
+		       gm.away_since, gm.away_until
 		FROM group_members gm
 		JOIN users u ON u.id = gm.user_id
 		WHERE gm.group_id = ?
@@ -175,14 +180,111 @@ func (h *GroupHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
 		Email    string    `json:"email"`
 		Role     string    `json:"role"`
 		JoinedAt time.Time `json:"joined_at"`
+		// Away right now, as opposed to merely having a period on record —
+		// a finished one is not away, and clients should not have to work that
+		// out from the dates themselves.
+		Away      bool       `json:"away"`
+		AwayUntil *time.Time `json:"away_until,omitempty"`
 	}
+
+	now := time.Now()
 	members := []MemberInfo{}
 	for rows.Next() {
 		var m MemberInfo
-		rows.Scan(&m.ID, &m.Username, &m.Email, &m.Role, &m.JoinedAt)
+		var awaySince, awayUntil sql.NullTime
+		if err := rows.Scan(&m.ID, &m.Username, &m.Email, &m.Role, &m.JoinedAt,
+			&awaySince, &awayUntil); err != nil {
+			log.Printf("ListMembers: scan failed for group %s: %v", groupID, err)
+			jsonError(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		m.Away = awaySince.Valid && (!awayUntil.Valid || awayUntil.Time.After(now))
+		if m.Away && awayUntil.Valid {
+			m.AwayUntil = &awayUntil.Time
+		}
 		members = append(members, m)
 	}
+	if err := rows.Err(); err != nil {
+		log.Printf("ListMembers: rows error for group %s: %v", groupID, err)
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	jsonResponse(w, http.StatusOK, members)
+}
+
+// SetAway handles PUT /groups/{group_id}/members/me/away — F5's second honest
+// exit, for being physically absent rather than merely overloaded.
+//
+// Away lifts you out of every rotation in this household until you return, and
+// re-enters you at the same position — which needs no bookkeeping, because the
+// order never changes and assignment simply steps over you. **No turns are owed
+// back.** That is the difference from busy: a pass defers a turn you still owe,
+// away means the turns that would have been yours were never yours.
+//
+// Per household, not per person: you can be away from one flat and still be
+// living in another. It is also not enforceable — the app cannot tell whether
+// you are really gone — so the spec makes it impossible to hide instead, and
+// ListMembers reports it to everyone.
+func (h *GroupHandler) SetAway(w http.ResponseWriter, r *http.Request) {
+	groupID := r.PathValue("group_id")
+	userID := middleware.GetUserID(r)
+
+	var req models.SetAwayRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if !req.Away {
+		// Coming back. Both ends are cleared, so a returning member is
+		// indistinguishable from one who was never away — there is no debt to
+		// carry forward and nothing to remember.
+		if _, err := h.DB.Exec(
+			`UPDATE group_members SET away_since = NULL, away_until = NULL
+			 WHERE group_id = ? AND user_id = ?`,
+			groupID, userID,
+		); err != nil {
+			jsonError(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		jsonResponse(w, http.StatusOK, map[string]any{"away": false})
+		return
+	}
+
+	var until *time.Time
+	if req.Until != nil {
+		parsed, err := time.Parse(time.RFC3339, *req.Until)
+		if err != nil {
+			jsonError(w, "until must be RFC3339 format", http.StatusBadRequest)
+			return
+		}
+		if !parsed.After(time.Now()) {
+			// An away period that is already over would store as away and read
+			// as present, which is the kind of state nobody can debug from the
+			// UI.
+			jsonError(w, "until must be in the future", http.StatusBadRequest)
+			return
+		}
+		until = &parsed
+	}
+
+	if _, err := h.DB.Exec(
+		`UPDATE group_members SET away_since = ?, away_until = ?
+		 WHERE group_id = ? AND user_id = ?`,
+		time.Now().UTC(), until, groupID, userID,
+	); err != nil {
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// No activity event, and no notification. Away is a state the household
+	// reads off the member list, not an announcement — the same posture the
+	// spec takes for passes.
+	response := map[string]any{"away": true}
+	if until != nil {
+		response["away_until"] = until
+	}
+	jsonResponse(w, http.StatusOK, response)
 }
 
 // LeaveGroup handles DELETE /groups/{group_id}/members/me — the caller removes

@@ -49,8 +49,14 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
   second rule — whoever ends up doing a passed chore is doing it for the passer,
   which is exactly a voluntary cover. No activity event is written: the spec
   gives a pass one private notification to the receiver and no group broadcast.
-  Still to come: **away** (a member attribute rotation assignment consults), and
-  the client UI for both.
+  **Away** is done server-side too: `PUT /groups/{id}/members/me/away`, per
+  household, open-ended or dated. Rotation assignment steps over away members
+  and they re-enter at the same position on return — no bookkeeping needed,
+  since the order never changes. An expired period needs no cleanup. Away is
+  *not* a debt: it never cancels a turn already owed. `ListMembers` reports it,
+  because the spec makes away deliberately impossible to hide.
+  Still to come: the client UI for both (3/3) — neither is reachable from the
+  app yet.
 - Multi-select and bulk status were removed with F1. The backend endpoint
   survives, unused by the client.
 

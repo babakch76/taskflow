@@ -32,6 +32,16 @@ type UpdateMeRequest struct {
 	QuietTo   *string `json:"quiet_to,omitempty"`
 }
 
+// SetAwayRequest declares the caller away from one household, or back (F5).
+//
+// Until is optional: an away period with no end is open-ended, which is the
+// honest default for "I don't know when I'm back". It is ignored when Away is
+// false.
+type SetAwayRequest struct {
+	Away  bool    `json:"away"`
+	Until *string `json:"until,omitempty"` // RFC3339
+}
+
 type Group struct {
 	ID          string    `json:"id"`
 	Name        string    `json:"name"`

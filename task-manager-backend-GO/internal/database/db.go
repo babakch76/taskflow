@@ -72,6 +72,16 @@ func migrate(db *sql.DB) error {
 		user_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 		role      TEXT NOT NULL DEFAULT 'member' CHECK(role IN ('owner','admin','member')),
 		joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		-- Away (F5): physically not at the house, so lifted out of every
+		-- rotation for the duration and re-entered at the same position on
+		-- return. No turns are owed back — away is not a debt, unlike busy.
+		--
+		-- away_since NULL means present. away_until NULL alongside a set
+		-- away_since means open-ended: away until they say otherwise. A period
+		-- that has run out needs no cleanup — the comparison simply stops
+		-- matching, so people return on their own.
+		away_since DATETIME,
+		away_until DATETIME,
 		UNIQUE(group_id, user_id)
 	);
 
@@ -273,6 +283,8 @@ func addMissingColumns(db *sql.DB) error {
 		// F3. A literal is a constant default, so unlike updated_at these can be
 		// added NOT NULL and existing users get the standard window rather than
 		// a NULL that every caller would have to interpret.
+		{table: "group_members", name: "away_since", ddl: `ALTER TABLE group_members ADD COLUMN away_since DATETIME`},
+		{table: "group_members", name: "away_until", ddl: `ALTER TABLE group_members ADD COLUMN away_until DATETIME`},
 		{table: "occurrences", name: "passed_from", ddl: `ALTER TABLE occurrences ADD COLUMN passed_from TEXT REFERENCES users(id)`},
 		{table: "occurrences", name: "passed_at", ddl: `ALTER TABLE occurrences ADD COLUMN passed_at DATETIME`},
 		{table: "users", name: "quiet_from", ddl: `ALTER TABLE users ADD COLUMN quiet_from TEXT NOT NULL DEFAULT '21:00'`},

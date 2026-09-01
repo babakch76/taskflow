@@ -953,7 +953,7 @@ func TestNextTurn(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			completed := &models.Occurrence{AssignedTo: tc.assignedTo, ResumeAfter: tc.resumeAfter}
-			gotAssignee, gotResume := nextTurn(rotation, completed, tc.doer)
+			gotAssignee, gotResume := nextTurn(rotation, completed, tc.doer, nil)
 
 			if gotAssignee != tc.wantAssignee {
 				t.Errorf("assignee: got %s, want %s", gotAssignee, tc.wantAssignee)
@@ -981,12 +981,12 @@ func TestNextInRotation(t *testing.T) {
 		{"stranger", "a"},
 	}
 	for _, tc := range cases {
-		if got := nextInRotation(rotation, tc.current); got != tc.want {
+		if got := nextInRotation(rotation, tc.current, nil); got != tc.want {
 			t.Errorf("nextInRotation(%s): got %s, want %s", tc.current, got, tc.want)
 		}
 	}
 
-	if got := nextInRotation([]string{"solo"}, "solo"); got != "solo" {
+	if got := nextInRotation([]string{"solo"}, "solo", nil); got != "solo" {
 		t.Errorf("a one-person rotation should stay with them, got %s", got)
 	}
 }
@@ -1224,7 +1224,7 @@ func TestPassIsRefusedWhenItWouldMakeNoSense(t *testing.T) {
 		if rec.Code != 409 {
 			t.Fatalf("got %d, want 409 (%s)", rec.Code, rec.Body.String())
 		}
-		if got := decodeError(t, rec); got != "there is nobody else in this chore's rotation" {
+		if got := decodeError(t, rec); got != "there is nobody else available in this chore's rotation" {
 			t.Errorf("error: got %q", got)
 		}
 	})
@@ -1264,6 +1264,201 @@ func TestPassingWritesNoActivityEvent(t *testing.T) {
 	if after != before {
 		t.Errorf("a pass wrote %d activity event(s); the board showing the new name is the whole mechanism",
 			after-before)
+	}
+}
+
+// --- F5: away ---------------------------------------------------------------
+
+// setAway marks a member away in a group, optionally until a given time.
+func setAway(t *testing.T, db *database.DB, groupID, userID string, until *time.Time) {
+	t.Helper()
+	var untilArg any
+	if until != nil {
+		untilArg = until.UTC()
+	}
+	if _, err := db.Exec(
+		`UPDATE group_members SET away_since = ?, away_until = ? WHERE group_id = ? AND user_id = ?`,
+		time.Now().UTC(), untilArg, groupID, userID,
+	); err != nil {
+		t.Fatalf("set away: %v", err)
+	}
+}
+
+// An away member is stepped over when the turn moves on, and steps back into
+// the same position when they return. No turns are owed back.
+func TestAwayMembersAreSkippedAndReturnInPlace(t *testing.T) {
+	db := newTestDB(t)
+	ann := newUser(t, db, "ann")
+	bo := newUser(t, db, "bo")
+	cass := newUser(t, db, "cass")
+	groupID := newGroup(t, db, ann, "Flat")
+	addMember(t, db, groupID, bo, "member")
+	addMember(t, db, groupID, cass, "member")
+
+	names := map[string]string{ann: "ann", bo: "bo", cass: "cass"}
+	chore := createChore(t, db, groupID, ann, fmt.Sprintf(`{
+		"name": "Kitchen", "schedule_type": "as_needed", "rotation": [%q, %q, %q]
+	}`, ann, bo, cass))
+
+	only := func() models.Occurrence {
+		t.Helper()
+		open := openOccurrencesFor(t, db, groupID, ann, chore.ID)
+		if len(open) != 1 {
+			t.Fatalf("expected one open occurrence, got %d", len(open))
+		}
+		return open[0]
+	}
+
+	// bo goes away, so ann's completion should skip straight to cass.
+	setAway(t, db, groupID, bo, nil)
+
+	turn1 := only()
+	patchOccurrence(t, db, groupID, turn1.ID, ann, "done")
+
+	turn2 := only()
+	if turn2.AssignedTo != cass {
+		t.Fatalf("turn went to %s, want cass — bo is away", names[turn2.AssignedTo])
+	}
+
+	// bo comes back. The rotation order never changed, so the next turn after
+	// cass is ann, and bo simply takes part again from their old position.
+	setAwayBack(t, db, groupID, bo)
+
+	patchOccurrence(t, db, groupID, turn2.ID, cass, "done")
+	turn3 := only()
+	if turn3.AssignedTo != ann {
+		t.Errorf("turn 3 went to %s, want ann", names[turn3.AssignedTo])
+	}
+
+	patchOccurrence(t, db, groupID, turn3.ID, ann, "done")
+	turn4 := only()
+	if turn4.AssignedTo != bo {
+		t.Errorf("turn 4 went to %s, want bo — back in their old position", names[turn4.AssignedTo])
+	}
+}
+
+func setAwayBack(t *testing.T, db *database.DB, groupID, userID string) {
+	t.Helper()
+	if _, err := db.Exec(
+		`UPDATE group_members SET away_since = NULL, away_until = NULL WHERE group_id = ? AND user_id = ?`,
+		groupID, userID,
+	); err != nil {
+		t.Fatalf("clear away: %v", err)
+	}
+}
+
+// An away period that has run out needs no cleanup — the member is simply back.
+func TestAnExpiredAwayPeriodMeansPresent(t *testing.T) {
+	db := newTestDB(t)
+	ann := newUser(t, db, "ann")
+	bo := newUser(t, db, "bo")
+	groupID := newGroup(t, db, ann, "Flat")
+	addMember(t, db, groupID, bo, "member")
+
+	past := time.Now().Add(-time.Hour)
+	setAway(t, db, groupID, bo, &past)
+
+	chore := createChore(t, db, groupID, ann, fmt.Sprintf(`{
+		"name": "Kitchen", "schedule_type": "as_needed", "rotation": [%q, %q]
+	}`, ann, bo))
+
+	occ := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	patchOccurrence(t, db, groupID, occ.ID, ann, "done")
+
+	next := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	if next.AssignedTo != bo {
+		t.Errorf("turn went to %s; bo's away period has ended, so bo is back in the rotation", next.AssignedTo)
+	}
+}
+
+// A brand-new chore should not land on somebody who is away — it would sit
+// untouched from the moment it existed.
+func TestANewChoreSkipsAnAwayFirstMember(t *testing.T) {
+	db := newTestDB(t)
+	ann := newUser(t, db, "ann")
+	bo := newUser(t, db, "bo")
+	groupID := newGroup(t, db, ann, "Flat")
+	addMember(t, db, groupID, bo, "member")
+
+	setAway(t, db, groupID, ann, nil)
+
+	chore := createChore(t, db, groupID, ann, fmt.Sprintf(`{
+		"name": "Kitchen", "schedule_type": "as_needed", "rotation": [%q, %q]
+	}`, ann, bo))
+
+	occ := openOccurrencesFor(t, db, groupID, bo, chore.ID)[0]
+	if occ.AssignedTo != bo {
+		t.Errorf("first turn went to %s, want bo — ann is away", occ.AssignedTo)
+	}
+}
+
+// Away is not a way to discharge a debt. A cover hands the turn back to whoever
+// owed it, whether or not they are away; it waits on their row, which is what
+// an open occurrence does anyway.
+func TestAwayDoesNotCancelADebtAlreadyOwed(t *testing.T) {
+	db := newTestDB(t)
+	ann := newUser(t, db, "ann")
+	bo := newUser(t, db, "bo")
+	groupID := newGroup(t, db, ann, "Flat")
+	addMember(t, db, groupID, bo, "member")
+
+	chore := createChore(t, db, groupID, ann, fmt.Sprintf(`{
+		"name": "Kitchen", "schedule_type": "as_needed", "rotation": [%q, %q]
+	}`, ann, bo))
+
+	occ := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	// ann goes away, and bo covers her turn while she is gone.
+	setAway(t, db, groupID, ann, nil)
+	patchOccurrence(t, db, groupID, occ.ID, bo, "done")
+
+	next := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	if next.AssignedTo != ann {
+		t.Errorf("the debt went to %s; going away does not discharge a turn you already owed", next.AssignedTo)
+	}
+}
+
+// With everybody away the chore still has to have exactly one name on it.
+func TestEveryoneAwayStillLeavesTheChoreWithSomebody(t *testing.T) {
+	db := newTestDB(t)
+	ann := newUser(t, db, "ann")
+	bo := newUser(t, db, "bo")
+	groupID := newGroup(t, db, ann, "Flat")
+	addMember(t, db, groupID, bo, "member")
+
+	chore := createChore(t, db, groupID, ann, fmt.Sprintf(`{
+		"name": "Kitchen", "schedule_type": "as_needed", "rotation": [%q, %q]
+	}`, ann, bo))
+
+	occ := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	setAway(t, db, groupID, ann, nil)
+	setAway(t, db, groupID, bo, nil)
+
+	patchOccurrence(t, db, groupID, occ.ID, ann, "done")
+
+	next := openOccurrencesFor(t, db, groupID, ann, chore.ID)
+	if len(next) != 1 {
+		t.Fatalf("expected one occurrence, got %d — everything on the board has exactly one name", len(next))
+	}
+	if next[0].AssignedTo != bo {
+		t.Errorf("assigned to %s, want the person whose turn it would have been (bo)", next[0].AssignedTo)
+	}
+}
+
+func TestNextInRotationSkipsAwayMembers(t *testing.T) {
+	rotation := []string{"a", "b", "c"}
+
+	if got := nextInRotation(rotation, "a", map[string]bool{"b": true}); got != "c" {
+		t.Errorf("with b away, after a should be c, got %s", got)
+	}
+	if got := nextInRotation(rotation, "a", map[string]bool{"b": true, "c": true}); got != "a" {
+		t.Errorf("with b and c away it wraps back to a, got %s", got)
+	}
+	if got := nextInRotation(rotation, "c", map[string]bool{"a": true}); got != "b" {
+		t.Errorf("wrapping past an away member: got %s, want b", got)
+	}
+	// Everybody away: still returns a name rather than an empty string.
+	if got := nextInRotation(rotation, "a", map[string]bool{"a": true, "b": true, "c": true}); got != "b" {
+		t.Errorf("everyone away should still yield the naive next (b), got %s", got)
 	}
 }
 

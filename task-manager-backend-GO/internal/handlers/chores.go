@@ -167,11 +167,24 @@ func (h *ChoreHandler) CreateChore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The first turn goes to the top of the rotation, or to the first person
+	// after them who is actually here. Handing a brand-new chore to somebody
+	// who is away would leave it sitting untouched from the moment it existed.
+	away, err := h.awayMembers(groupID)
+	if err != nil {
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	firstAssignee := rotation[0]
+	if away[firstAssignee] {
+		firstAssignee = nextInRotation(rotation, rotation[0], away)
+	}
+
 	occ := models.Occurrence{
 		ID:         uuid.New().String(),
 		ChoreID:    chore.ID,
 		GroupID:    groupID,
-		AssignedTo: rotation[0],
+		AssignedTo: firstAssignee,
 		Status:     models.OccurrenceOpen,
 		DueDate:    firstDue,
 		ChoreName:  chore.Name,
@@ -596,7 +609,13 @@ func (h *ChoreHandler) UpdateOccurrence(w http.ResponseWriter, r *http.Request) 
 			jsonError(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		if err := spawnNext(tx, chore, current, userID, completedAt); err != nil {
+		away, err := h.awayMembers(groupID)
+		if err != nil {
+			log.Printf("UpdateOccurrence: away lookup failed for group %s: %v", groupID, err)
+			jsonError(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if err := spawnNext(tx, chore, current, userID, completedAt, away); err != nil {
 			log.Printf("UpdateOccurrence: spawn failed for chore %s: %v", current.ChoreID, err)
 			jsonError(w, "internal error", http.StatusInternalServerError)
 			return
@@ -762,11 +781,17 @@ func (h *ChoreHandler) PassOccurrence(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	receiver := nextInRotation(chore.Rotation, current.AssignedTo)
+	away, err := h.awayMembers(groupID)
+	if err != nil {
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	receiver := nextInRotation(chore.Rotation, current.AssignedTo, away)
 	if receiver == current.AssignedTo {
-		// A rotation of one. There is nobody to pass to, and saying so is
-		// better than silently doing nothing and looking broken.
-		jsonError(w, "there is nobody else in this chore's rotation", http.StatusConflict)
+		// Either a rotation of one, or everyone else is away. Both mean there
+		// is nobody to hand it to, and saying so is better than silently doing
+		// nothing and looking broken.
+		jsonError(w, "there is nobody else available in this chore's rotation", http.StatusConflict)
 		return
 	}
 
@@ -817,7 +842,14 @@ func (h *ChoreHandler) PassOccurrence(w http.ResponseWriter, r *http.Request) {
 // A one-off has nothing to spawn: it is the whole of its own schedule.
 //
 // Who gets the next turn is decided by nextTurn — the unified turn rule.
-func spawnNext(tx *sql.Tx, chore *models.Chore, completed *models.Occurrence, doerID string, completedAt time.Time) error {
+func spawnNext(
+	tx *sql.Tx,
+	chore *models.Chore,
+	completed *models.Occurrence,
+	doerID string,
+	completedAt time.Time,
+	away map[string]bool,
+) error {
 	if chore.ScheduleType == models.ScheduleOneOff {
 		return nil
 	}
@@ -828,7 +860,7 @@ func spawnNext(tx *sql.Tx, chore *models.Chore, completed *models.Occurrence, do
 		return nil
 	}
 
-	assignee, resumeAfter := nextTurn(chore.Rotation, completed, doerID)
+	assignee, resumeAfter := nextTurn(chore.Rotation, completed, doerID, away)
 
 	next := models.Occurrence{
 		ID:          uuid.New().String(),
@@ -873,7 +905,12 @@ func spawnNext(tx *sql.Tx, chore *models.Chore, completed *models.Occurrence, do
 //
 // Returns the next assignee, and the resume point to carry on that occurrence
 // (nil when the rotation is running normally).
-func nextTurn(rotation []string, completed *models.Occurrence, doerID string) (assignee string, resumeAfter *string) {
+func nextTurn(
+	rotation []string,
+	completed *models.Occurrence,
+	doerID string,
+	away map[string]bool,
+) (assignee string, resumeAfter *string) {
 	// Whose turn this actually was. A busy pass (F5) moves the name on the
 	// board without moving the obligation: the person who passed it still owes
 	// this turn, so they are the one the debt returns to.
@@ -889,6 +926,10 @@ func nextTurn(rotation []string, completed *models.Occurrence, doerID string) (a
 	if doerID != owedBy {
 		// A cover. The debt goes back to whoever owed the turn, and the
 		// rotation will pick up after whoever actually did it.
+		//
+		// The debt is handed back even if that person is now away: they owe
+		// this turn, and away is not a way to discharge it. It waits on their
+		// row, which is exactly what an open occurrence does anyway.
 		doer := doerID
 		return owedBy, &doer
 	}
@@ -901,20 +942,69 @@ func nextTurn(rotation []string, completed *models.Occurrence, doerID string) (a
 	if completed.ResumeAfter != nil {
 		from = *completed.ResumeAfter
 	}
-	return nextInRotation(rotation, from), nil
+	return nextInRotation(rotation, from, away), nil
 }
 
-// nextInRotation returns whoever's turn follows the current holder's.
+// nextInRotation returns whoever's turn follows the current holder's, skipping
+// anyone who is away.
 //
-// If the holder is no longer in the rotation — they were edited out, or left
-// the group — the turn starts again at the top rather than being lost.
-func nextInRotation(rotation []string, current string) string {
+// Away members are lifted out of every rotation for the duration and re-enter
+// at the same position on return — which needs no bookkeeping at all, because
+// the order never changes; assignment simply steps over them. And no turns are
+// owed back: unlike a busy pass, being away is not a debt.
+//
+// If the holder is no longer in the rotation — edited out, or left the group —
+// the turn starts again at the top rather than being lost.
+//
+// If *everyone* is away, the turn goes to whoever it would have gone to anyway.
+// A chore has to have exactly one name on it, and the least surprising name is
+// the one whose turn it actually is; it waits on their row until they are back.
+func nextInRotation(rotation []string, current string, away map[string]bool) string {
+	start := 0
 	for i, userID := range rotation {
 		if userID == current {
-			return rotation[(i+1)%len(rotation)]
+			start = i + 1
+			break
 		}
 	}
-	return rotation[0]
+
+	for step := 0; step < len(rotation); step++ {
+		candidate := rotation[(start+step)%len(rotation)]
+		if !away[candidate] {
+			return candidate
+		}
+	}
+	// Nobody is available. Fall back to the naive next.
+	return rotation[start%len(rotation)]
+}
+
+// awayMembers is the set of members currently lifted out of this group's
+// rotations.
+//
+// A finished away period needs no cleanup: away_until simply stops being in the
+// future, and the row stops matching. People come back on their own.
+func (h *ChoreHandler) awayMembers(groupID string) (map[string]bool, error) {
+	rows, err := h.DB.Query(`
+		SELECT user_id FROM group_members
+		WHERE group_id = ?
+		  AND away_since IS NOT NULL
+		  AND (away_until IS NULL OR away_until > ?)`,
+		groupID, time.Now().UTC(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	away := map[string]bool{}
+	for rows.Next() {
+		var userID string
+		if err := rows.Scan(&userID); err != nil {
+			return nil, err
+		}
+		away[userID] = true
+	}
+	return away, rows.Err()
 }
 
 // nextDueDate is when the chore is next due, given when it was just completed.
