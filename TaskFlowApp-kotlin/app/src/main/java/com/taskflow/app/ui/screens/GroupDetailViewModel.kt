@@ -13,6 +13,7 @@ import com.taskflow.app.data.model.InviteByUsernameRequest
 import com.taskflow.app.data.model.MemberInfo
 import com.taskflow.app.data.model.Occurrence
 import com.taskflow.app.data.model.Patchable
+import com.taskflow.app.data.model.SetAwayRequest
 import com.taskflow.app.data.model.Task
 import com.taskflow.app.data.model.UpdateChoreRequest
 import com.taskflow.app.data.model.UpdateMeRequest
@@ -417,6 +418,54 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
         runAction(successMessage = if (target == "done") "Marked done" else "Completion undone") {
             api.updateOccurrence(groupId, occurrence.id, UpdateOccurrenceRequest(status = target))
         }
+    }
+
+    /**
+     * Busy — pass this one (F5).
+     *
+     * Hands an open occurrence of yours to the next person in the rotation. The
+     * turn comes back to you next cycle, so the snackbar says so: someone
+     * expecting to have got rid of it should find that out from the app, not
+     * from the board a week later.
+     */
+    fun passOccurrence(occurrence: Occurrence) {
+        runAction(successMessage = "Passed on — it comes back to you next time") {
+            api.passOccurrence(groupId, occurrence.id)
+        }
+    }
+
+    /**
+     * Away, or back (F5).
+     *
+     * [until] is an RFC 3339 instant, or null for open-ended. Members are
+     * reloaded on success because away is shown throughout the group's screens,
+     * and runAction refreshes the board but not the member list.
+     */
+    fun setAway(away: Boolean, until: String?) {
+        runAction(
+            successMessage = if (away) "You're marked away" else "Welcome back",
+            // Reloaded *after* the write lands, not alongside it — firing both
+            // at once would race, and the loser would paint the old state back.
+            onResult = { failure ->
+                if (failure == null) {
+                    viewModelScope.launch { refreshMembers() }
+                } else {
+                    _uiState.value = _uiState.value.copy(message = failure)
+                }
+            },
+        ) {
+            api.setAway(groupId, SetAwayRequest(away = away, until = until))
+        }
+    }
+
+    /**
+     * Re-reads the member list. Away is shown throughout the group's screens,
+     * and [runAction] refreshes the board but not the roster.
+     */
+    private suspend fun refreshMembers() {
+        runCatching { api.listMembers(groupId) }.getOrNull()
+            ?.takeIf { it.isSuccessful }?.body()
+            ?.let { _uiState.value = _uiState.value.copy(members = it) }
     }
 
     /**

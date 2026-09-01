@@ -185,4 +185,25 @@ interface GroupApiService {
         @Path("occurrence_id") occurrenceId: String,
         @Body request: UpdateOccurrenceRequest,
     ): Response<Occurrence>
+
+    /**
+     * Busy — pass an open occurrence of yours to the next person in the
+     * rotation (F5).
+     *
+     * The turn comes back to you next cycle: passing defers it, it never
+     * deletes it. Refused with 403 if it isn't yours and 409 if there is nobody
+     * available to take it.
+     */
+    @POST("groups/{group_id}/occurrences/{occurrence_id}/pass")
+    suspend fun passOccurrence(
+        @Path("group_id") groupId: String,
+        @Path("occurrence_id") occurrenceId: String,
+    ): Response<Occurrence>
+
+    /** Declare yourself away from this household, or back (F5). */
+    @PUT("groups/{group_id}/members/me/away")
+    suspend fun setAway(
+        @Path("group_id") groupId: String,
+        @Body request: SetAwayRequest,
+    ): Response<Unit>
 }

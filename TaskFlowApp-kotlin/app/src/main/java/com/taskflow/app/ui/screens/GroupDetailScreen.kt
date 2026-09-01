@@ -45,6 +45,7 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.core.content.ContextCompat
@@ -102,6 +103,7 @@ fun GroupDetailScreen(
     var showCreateTask by remember { mutableStateOf(false) }
     var showCreateChore by remember { mutableStateOf(false) }
     var showQuietHours by remember { mutableStateOf(false) }
+    var showAway by remember { mutableStateOf(false) }
 
     // Per-form submit state, so a create dialog can stay open until the write
     // lands and show a rejection where the user is already looking (B-7).
@@ -139,6 +141,8 @@ fun GroupDetailScreen(
     val myUserId = remember {
         (context.applicationContext as? TaskFlowApp)?.tokenManager?.getUserId()
     }
+
+    val iAmAway = state.members.firstOrNull { it.id == myUserId }?.away == true
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -239,6 +243,17 @@ fun GroupDetailScreen(
                                 text = { Text("Quiet hours") },
                                 leadingIcon = { Icon(Icons.Default.Notifications, null) },
                                 onClick = { showMenu = false; showQuietHours = true },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(if (iAmAway) "I'm back" else "I'm away") },
+                                leadingIcon = { Icon(Icons.Default.DateRange, null) },
+                                onClick = {
+                                    showMenu = false
+                                    // Coming back needs no explaining; going
+                                    // away does, so only that direction gets a
+                                    // dialog.
+                                    if (iAmAway) viewModel.setAway(false, null) else showAway = true
+                                },
                             )
                             HorizontalDivider()
                             DropdownMenuItem(
@@ -419,7 +434,12 @@ fun GroupDetailScreen(
             occurrence = occurrence,
             chore = state.chores.firstOrNull { it.id == occurrence.choreId },
             members = state.members,
+            myUserId = myUserId,
             onDismiss = { detailOccurrenceId = null },
+            onPass = {
+                detailOccurrenceId = null
+                viewModel.passOccurrence(occurrence)
+            },
             onEditChore = {
                 // Close the sheet first: an AlertDialog over a bottom sheet
                 // stacks two surfaces and the sheet's scrim fights the dialog's.
@@ -491,6 +511,16 @@ fun GroupDetailScreen(
                     choreSubmitting = false
                     if (failure == null) showCreateChore = false else choreError = failure
                 }
+            },
+        )
+    }
+
+    if (showAway) {
+        AwayDialog(
+            onDismiss = { showAway = false },
+            onConfirm = { until ->
+                showAway = false
+                viewModel.setAway(true, until)
             },
         )
     }
@@ -975,12 +1005,15 @@ private fun OccurrenceDetailSheet(
     occurrence: Occurrence,
     chore: Chore?,
     members: List<MemberInfo>,
+    myUserId: String?,
     onDismiss: () -> Unit,
     onEditChore: () -> Unit,
+    onPass: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val assignee = members.firstOrNull { it.id == occurrence.assignedTo }?.username
     val doer = members.firstOrNull { it.id == occurrence.doneBy }?.username
+    val passer = occurrence.passedFrom?.let { id -> members.firstOrNull { it.id == id }?.username }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(
@@ -1046,18 +1079,52 @@ private fun OccurrenceDetailSheet(
                     ?: "No date — it waits until it's needed",
             )
 
+            // A passed chore says where it came from, so the receiver knows why
+            // it is on their row and the passer can see it landed. Neutral
+            // wording: passing is a normal move, not something to answer for.
+            if (occurrence.isOpen && passer != null) {
+                Text(
+                    if (occurrence.passedFrom == myUserId) {
+                        "You passed this on. It comes back to you next time."
+                    } else {
+                        "$passer passed this on, so it's yours this cycle."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
             if (!occurrence.isOpen) {
                 DetailRow("Done by", doer ?: "—")
                 DetailRow("Done", formatStamp(occurrence.doneAt))
-                if (doer != null && assignee != null && doer != assignee) {
+                // Who the turn actually belonged to: the passer if it was
+                // passed, otherwise whoever it was assigned to.
+                val owed = passer ?: assignee
+                if (doer != null && owed != null && doer != owed) {
                     // Stated plainly, without praise or blame either way. It is
                     // simply how the next turn was decided.
                     Text(
-                        "$doer covered this one, so the next turn goes back to $assignee.",
+                        "$doer covered this one, so the next turn goes back to $owed.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+            }
+
+            // "Busy — pass it": only on an open occurrence that is actually
+            // yours. Passing somebody else's turn would be handing out work,
+            // and the server refuses it anyway.
+            if (occurrence.isOpen && occurrence.assignedTo == myUserId) {
+                HorizontalDivider()
+                OutlinedButton(onClick = onPass, modifier = Modifier.fillMaxWidth()) {
+                    Text("Busy — pass it on")
+                }
+                Text(
+                    "Goes to the next person in the rotation. It comes back to you next " +
+                        "time round, so this delays your turn rather than skipping it.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
@@ -1726,6 +1793,19 @@ private fun MemberList(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                            // Away is stated on the member list because the
+                            // spec makes it deliberately impossible to hide —
+                            // the app cannot check whether someone is really
+                            // gone, so it shows the claim to everyone instead.
+                            if (member.away) {
+                                Text(
+                                    text = member.awayUntil?.let { "Away until ${formatDueDate(it)}" }
+                                        ?: "Away",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
                         }
                         RoleChip(member.role)
                     }
@@ -1773,6 +1853,85 @@ private fun RoleChip(role: String) {
 // ═══════════════════════════════════════════════════════════════
 // Dialogs
 // ═══════════════════════════════════════════════════════════════
+
+/**
+ * Away (F5) — "I'm not at the house".
+ *
+ * The dialog states the rule it cannot enforce: away is for being physically
+ * gone, not for a busy week. The app has no way to check, so the spec's answer
+ * is to make the claim impossible to hide rather than to police it — hence the
+ * line about everyone seeing it. Social enforcement, zero mechanics.
+ *
+ * It also names the alternative, because someone reaching for "away" when they
+ * mean "not this week" needs somewhere else to go, and busy is right there on
+ * the chore itself.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AwayDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (until: String?) -> Unit,
+) {
+    // Open-ended by default: "I don't know when I'm back" is the honest common
+    // case, and guessing a return date you then have to correct is worse.
+    var days by remember { mutableStateOf<Int?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Away from the house", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "You'll be taken out of every rotation here until you're back, and you'll " +
+                        "come back in the same place. No turns are owed.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    "This is for actually being away. If you're sleeping at home but this week " +
+                        "is bad, use \"Busy — pass it on\" on the chore instead.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Text("Until", style = MaterialTheme.typography.labelMedium)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    FilterChip(
+                        selected = days == null,
+                        onClick = { days = null },
+                        label = { Text("Until I say") },
+                    )
+                    listOf(3, 7, 14, 30).forEach { option ->
+                        FilterChip(
+                            selected = days == option,
+                            onClick = { days = option },
+                            label = { Text("$option days") },
+                        )
+                    }
+                }
+
+                HorizontalDivider()
+                Text(
+                    "Everyone in the household can see that you're away.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                val until = days?.let {
+                    OffsetDateTime.now().plusDays(it.toLong())
+                        .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+                }
+                onConfirm(until)
+            }) { Text("I'm away") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
 
 /**
  * Quiet hours (F3).
@@ -2008,9 +2167,16 @@ private fun EditChoreDialog(
                                 error = null
                             },
                             label = {
+                                // Away is shown wherever a name appears in a
+                                // rotation, per F5. Still selectable: you may
+                                // well want someone in the order for when they
+                                // are back; assignment simply steps over them.
                                 Text(
-                                    if (position >= 0) "${position + 1}. ${member.username}"
-                                    else member.username,
+                                    buildString {
+                                        if (position >= 0) append("${position + 1}. ")
+                                        append(member.username)
+                                        if (member.away) append(" · away")
+                                    },
                                 )
                             },
                         )
@@ -2271,9 +2437,16 @@ private fun CreateChoreDialog(
                                 error = null
                             },
                             label = {
+                                // Away is shown wherever a name appears in a
+                                // rotation, per F5. Still selectable: you may
+                                // well want someone in the order for when they
+                                // are back; assignment simply steps over them.
                                 Text(
-                                    if (position >= 0) "${position + 1}. ${member.username}"
-                                    else member.username,
+                                    buildString {
+                                        if (position >= 0) append("${position + 1}. ")
+                                        append(member.username)
+                                        if (member.away) append(" · away")
+                                    },
                                 )
                             },
                         )

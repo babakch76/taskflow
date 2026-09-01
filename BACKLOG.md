@@ -55,8 +55,14 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
   since the order never changes. An expired period needs no cleanup. Away is
   *not* a debt: it never cancels a turn already owed. `ListMembers` reports it,
   because the spec makes away deliberately impossible to hide.
-  Still to come: the client UI for both (3/3) — neither is reachable from the
-  app yet.
+  The **client** has both now: "Busy — pass it on" on an open occurrence of
+  yours, and an away toggle in the group's overflow menu whose dialog states the
+  rule the app cannot enforce and points at busy as the alternative. Away shows
+  on the member list and beside names in every rotation picker.
+- **F6 (history) — NEXT** and the last feature in the build order. Read-only
+  queries over records that are already persisted: per chore (a timeline of
+  completions) and per person (completions in a window, counting done_by so
+  covering counts for the coverer). No points, ranks, streaks or comparisons.
 - Multi-select and bulk status were removed with F1. The backend endpoint
   survives, unused by the client.
 

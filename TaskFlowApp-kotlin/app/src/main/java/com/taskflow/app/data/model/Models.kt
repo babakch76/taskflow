@@ -173,6 +173,15 @@ data class Occurrence(
     val doneAt: OffsetDateTime? = null,
     @SerializedName("created_at")
     val createdAt: OffsetDateTime? = null,
+    /**
+     * Who passed this occurrence away, if anyone (F5). The debt stays with them
+     * through a chain of passes, so the next turn returns here.
+     */
+    @SerializedName("passed_from")
+    val passedFrom: String? = null,
+    /** When it last changed hands — when it became the current holder's turn. */
+    @SerializedName("passed_at")
+    val passedAt: OffsetDateTime? = null,
     /** Joined in by the backend so a row renders without a second round trip. */
     @SerializedName("chore_name")
     val choreName: String = "",
@@ -257,6 +266,18 @@ data class MemberInfo(
     val role: String,   // "owner", "admin", "member"
     @SerializedName("joined_at")
     val joinedAt: OffsetDateTime? = null,
+    /**
+     * Away right now (F5) — lifted out of every rotation in this household
+     * until they're back.
+     *
+     * The server reports this rather than raw dates, so a period that has run
+     * out already reads as present. It is shown wherever the member's name
+     * appears, deliberately: the app can't tell whether someone is really gone,
+     * so the spec makes the claim impossible to hide instead.
+     */
+    val away: Boolean = false,
+    @SerializedName("away_until")
+    val awayUntil: OffsetDateTime? = null,
 )
 
 // ═══════════════════════════════════════════════════════════════
@@ -391,6 +412,17 @@ data class UpdateMeRequest(
     val quietFrom: String? = null,
     @SerializedName("quiet_to")
     val quietTo: String? = null,
+)
+
+/**
+ * Body for PUT /groups/{group_id}/members/me/away (F5).
+ *
+ * [until] is optional: no end date means open-ended, the honest default for
+ * "I don't know when I'm back". Ignored when [away] is false.
+ */
+data class SetAwayRequest(
+    val away: Boolean,
+    val until: String? = null,   // RFC 3339
 )
 
 data class InviteByUsernameRequest(
