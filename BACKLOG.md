@@ -42,9 +42,15 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
   changed fields are sent, and the group sees the diff the backend already
   produced — the spec's own example, "weekly → every 3 days", now reachable
   from the UI. The schedule *type* stays immutable.
-- **F5 (busy/away) — the larger remaining piece.** Its pass should reuse
-  `nextTurn` rather than growing a second copy of the rule; `resume_after`
-  already carries what the debt case needs.
+- **F5 (busy/away) — IN PROGRESS.** The busy pass is done server-side:
+  `POST /occurrences/{id}/pass` hands the chore to the next person in the
+  rotation, refreshes an already-overdue date to tomorrow, and keeps the debt
+  with the passer via `passed_from`. It reuses `nextTurn` rather than growing a
+  second rule — whoever ends up doing a passed chore is doing it for the passer,
+  which is exactly a voluntary cover. No activity event is written: the spec
+  gives a pass one private notification to the receiver and no group broadcast.
+  Still to come: **away** (a member attribute rotation assignment consults), and
+  the client UI for both.
 - Multi-select and bulk status were removed with F1. The backend endpoint
   survives, unused by the client.
 

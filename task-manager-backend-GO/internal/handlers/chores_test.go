@@ -991,6 +991,282 @@ func TestNextInRotation(t *testing.T) {
 	}
 }
 
+// --- F5: the busy pass ------------------------------------------------------
+
+func passOccurrence(t *testing.T, db *database.DB, groupID, occurrenceID, userID string) *httptest.ResponseRecorder {
+	t.Helper()
+	h := &ChoreHandler{DB: db}
+	rec := httptest.NewRecorder()
+	h.PassOccurrence(rec, request("POST",
+		"/groups/"+groupID+"/occurrences/"+occurrenceID+"/pass", "", userID,
+		map[string]string{"group_id": groupID, "occurrence_id": occurrenceID}))
+	return rec
+}
+
+// A pass hands the chore to the next person in the rotation and nothing more —
+// no approval, no reason, no penalty.
+func TestBusyPassMovesTheChoreToTheNextPerson(t *testing.T) {
+	db := newTestDB(t)
+	ann := newUser(t, db, "ann")
+	bo := newUser(t, db, "bo")
+	groupID := newGroup(t, db, ann, "Flat")
+	addMember(t, db, groupID, bo, "member")
+
+	chore := createChore(t, db, groupID, ann, fmt.Sprintf(`{
+		"name": "Kitchen", "schedule_type": "as_needed", "rotation": [%q, %q]
+	}`, ann, bo))
+
+	open := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	rec := passOccurrence(t, db, groupID, open.ID, ann)
+	if rec.Code != 200 {
+		t.Fatalf("pass: got %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	var passed models.Occurrence
+	json.Unmarshal(rec.Body.Bytes(), &passed)
+	if passed.AssignedTo != bo {
+		t.Errorf("passed to %s, want bo", passed.AssignedTo)
+	}
+	if passed.PassedFrom == nil || *passed.PassedFrom != ann {
+		t.Errorf("passed_from: got %v, want ann — the debt has to stay with her", passed.PassedFrom)
+	}
+	if passed.PassedAt == nil {
+		t.Error("passed_at not recorded; the receiver's reminder is measured from it")
+	}
+	if passed.Status != models.OccurrenceOpen {
+		t.Errorf("status changed to %q — a pass is not a completion", passed.Status)
+	}
+	// Still exactly one occurrence, with exactly one name on it.
+	if got := openOccurrencesFor(t, db, groupID, ann, chore.ID); len(got) != 1 {
+		t.Errorf("expected one open occurrence after a pass, got %d", len(got))
+	}
+}
+
+// The debt rule, end to end: passing is a one-cycle swap with whoever is next.
+//
+// rotation [ann, bo, cass], ann's turn, ann passes to bo, bo does it:
+//
+//	turn 1  ann → bo   passed; bo completes it
+//	turn 2  ann        ← back to ann, who deferred but still owes it
+//	turn 3  cass       ← after bo, because doing it counted as bo's turn
+//
+// "Declaring busy defers your turn; it never deletes it."
+func TestPassingDefersTheTurnItDoesNotDeleteIt(t *testing.T) {
+	db := newTestDB(t)
+	ann := newUser(t, db, "ann")
+	bo := newUser(t, db, "bo")
+	cass := newUser(t, db, "cass")
+	groupID := newGroup(t, db, ann, "Flat")
+	addMember(t, db, groupID, bo, "member")
+	addMember(t, db, groupID, cass, "member")
+
+	names := map[string]string{ann: "ann", bo: "bo", cass: "cass"}
+	chore := createChore(t, db, groupID, ann, fmt.Sprintf(`{
+		"name": "Kitchen", "schedule_type": "as_needed", "rotation": [%q, %q, %q]
+	}`, ann, bo, cass))
+
+	only := func() models.Occurrence {
+		t.Helper()
+		open := openOccurrencesFor(t, db, groupID, ann, chore.ID)
+		if len(open) != 1 {
+			t.Fatalf("expected one open occurrence, got %d", len(open))
+		}
+		return open[0]
+	}
+
+	turn1 := only()
+	passOccurrence(t, db, groupID, turn1.ID, ann)
+	// bo, who received it, does it.
+	patchOccurrence(t, db, groupID, turn1.ID, bo, "done")
+
+	turn2 := only()
+	if turn2.AssignedTo != ann {
+		t.Fatalf("turn 2 went to %s; a pass defers ann's turn, it does not delete it",
+			names[turn2.AssignedTo])
+	}
+	if turn2.ResumeAfter == nil || *turn2.ResumeAfter != bo {
+		t.Fatalf("turn 2 should resume after bo, got %v", turn2.ResumeAfter)
+	}
+
+	patchOccurrence(t, db, groupID, turn2.ID, ann, "done")
+	turn3 := only()
+	if turn3.AssignedTo != cass {
+		t.Errorf("turn 3 went to %s, want cass — bo doing it counted as bo's turn",
+			names[turn3.AssignedTo])
+	}
+}
+
+// Passing on declines a favour, not a duty: the second passer keeps their own
+// turn, and the debt stays with whoever it belonged to in the first place.
+func TestPassingOnwardLeavesTheDebtWithTheFirstPasser(t *testing.T) {
+	db := newTestDB(t)
+	ann := newUser(t, db, "ann")
+	bo := newUser(t, db, "bo")
+	cass := newUser(t, db, "cass")
+	groupID := newGroup(t, db, ann, "Flat")
+	addMember(t, db, groupID, bo, "member")
+	addMember(t, db, groupID, cass, "member")
+
+	chore := createChore(t, db, groupID, ann, fmt.Sprintf(`{
+		"name": "Bin", "schedule_type": "as_needed", "rotation": [%q, %q, %q]
+	}`, ann, bo, cass))
+
+	occ := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	passOccurrence(t, db, groupID, occ.ID, ann) // ann → bo
+	passOccurrence(t, db, groupID, occ.ID, bo)  // bo  → cass
+
+	after := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	if after.AssignedTo != cass {
+		t.Fatalf("the chain did not reach cass: %s", after.AssignedTo)
+	}
+	if after.PassedFrom == nil || *after.PassedFrom != ann {
+		t.Errorf("passed_from moved to %v; it must stay with ann, whose turn it was", after.PassedFrom)
+	}
+
+	// cass does it: the debt returns to ann, not to bo.
+	patchOccurrence(t, db, groupID, after.ID, cass, "done")
+	next := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	if next.AssignedTo != ann {
+		t.Errorf("next turn went to %s, want ann", next.AssignedTo)
+	}
+	// The assignee alone does not prove the debt was honoured: with this
+	// rotation, "the person after cass" is also ann, so a build that had lost
+	// passed_from entirely would still land on her. resume_after is what
+	// distinguishes the two — it is only set when the completion was a cover.
+	if next.ResumeAfter == nil || *next.ResumeAfter != cass {
+		t.Errorf("resume_after: got %v, want cass — this was a cover, not cass's own turn",
+			next.ResumeAfter)
+	}
+}
+
+// An overdue chore arrives with a fresh date. Receiving something already late,
+// still stamped late, would make a favour feel like a penalty.
+func TestPassingSomethingOverdueGivesTheReceiverUntilTomorrow(t *testing.T) {
+	db := newTestDB(t)
+	ann := newUser(t, db, "ann")
+	bo := newUser(t, db, "bo")
+	groupID := newGroup(t, db, ann, "Flat")
+	addMember(t, db, groupID, bo, "member")
+
+	chore := createChore(t, db, groupID, ann, fmt.Sprintf(`{
+		"name": "Kitchen", "schedule_type": "interval", "interval_days": 3,
+		"rotation": [%q, %q]
+	}`, ann, bo))
+
+	occ := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	stale := time.Now().AddDate(0, 0, -4)
+	if _, err := db.Exec(`UPDATE occurrences SET due_date = ? WHERE id = ?`, stale.UTC(), occ.ID); err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+
+	passOccurrence(t, db, groupID, occ.ID, ann)
+
+	after := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	if after.DueDate == nil {
+		t.Fatal("due date was cleared")
+	}
+	if after.DueDate.YearDay() != time.Now().AddDate(0, 0, 1).YearDay() {
+		t.Errorf("due %s, want tomorrow", after.DueDate.Format(time.RFC3339))
+	}
+}
+
+// A chore that isn't late keeps its date — the deadline belongs to the chore,
+// not to whoever happens to be holding it.
+func TestPassingSomethingNotYetDueKeepsItsDate(t *testing.T) {
+	db := newTestDB(t)
+	ann := newUser(t, db, "ann")
+	bo := newUser(t, db, "bo")
+	groupID := newGroup(t, db, ann, "Flat")
+	addMember(t, db, groupID, bo, "member")
+
+	chore := createChore(t, db, groupID, ann, fmt.Sprintf(`{
+		"name": "Kitchen", "schedule_type": "interval", "interval_days": 5,
+		"rotation": [%q, %q]
+	}`, ann, bo))
+
+	before := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	passOccurrence(t, db, groupID, before.ID, ann)
+	after := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+
+	if before.DueDate == nil || after.DueDate == nil || !before.DueDate.Equal(*after.DueDate) {
+		t.Errorf("due date moved from %v to %v", before.DueDate, after.DueDate)
+	}
+}
+
+func TestPassIsRefusedWhenItWouldMakeNoSense(t *testing.T) {
+	db := newTestDB(t)
+	ann := newUser(t, db, "ann")
+	bo := newUser(t, db, "bo")
+	groupID := newGroup(t, db, ann, "Flat")
+	addMember(t, db, groupID, bo, "member")
+
+	shared := createChore(t, db, groupID, ann, fmt.Sprintf(`{
+		"name": "Kitchen", "schedule_type": "as_needed", "rotation": [%q, %q]
+	}`, ann, bo))
+	solo := createChore(t, db, groupID, ann, fmt.Sprintf(`{
+		"name": "Solo", "schedule_type": "as_needed", "rotation": [%q]
+	}`, ann))
+
+	t.Run("somebody else's turn is not yours to hand out", func(t *testing.T) {
+		occ := openOccurrencesFor(t, db, groupID, ann, shared.ID)[0]
+		rec := passOccurrence(t, db, groupID, occ.ID, bo)
+		if rec.Code != 403 {
+			t.Fatalf("got %d, want 403 (%s)", rec.Code, rec.Body.String())
+		}
+		if got := decodeError(t, rec); got != "only the person it is assigned to can pass it" {
+			t.Errorf("error: got %q", got)
+		}
+	})
+
+	t.Run("a rotation of one has nobody to pass to", func(t *testing.T) {
+		occ := openOccurrencesFor(t, db, groupID, ann, solo.ID)[0]
+		rec := passOccurrence(t, db, groupID, occ.ID, ann)
+		if rec.Code != 409 {
+			t.Fatalf("got %d, want 409 (%s)", rec.Code, rec.Body.String())
+		}
+		if got := decodeError(t, rec); got != "there is nobody else in this chore's rotation" {
+			t.Errorf("error: got %q", got)
+		}
+	})
+
+	t.Run("a finished chore cannot be passed", func(t *testing.T) {
+		occ := openOccurrencesFor(t, db, groupID, ann, shared.ID)[0]
+		patchOccurrence(t, db, groupID, occ.ID, ann, "done")
+		rec := passOccurrence(t, db, groupID, occ.ID, ann)
+		if rec.Code != 409 {
+			t.Fatalf("got %d, want 409 (%s)", rec.Code, rec.Body.String())
+		}
+	})
+}
+
+// Constraint 7 and F3: a pass gets one private notification to the receiver and
+// no group broadcast. A feed line naming who declined would be exactly the
+// social pressure this feature removes.
+func TestPassingWritesNoActivityEvent(t *testing.T) {
+	db := newTestDB(t)
+	ann := newUser(t, db, "ann")
+	bo := newUser(t, db, "bo")
+	groupID := newGroup(t, db, ann, "Flat")
+	addMember(t, db, groupID, bo, "member")
+
+	chore := createChore(t, db, groupID, ann, fmt.Sprintf(`{
+		"name": "Kitchen", "schedule_type": "as_needed", "rotation": [%q, %q]
+	}`, ann, bo))
+
+	var before int
+	db.QueryRow(`SELECT COUNT(*) FROM activity_events WHERE group_id = ?`, groupID).Scan(&before)
+
+	occ := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	passOccurrence(t, db, groupID, occ.ID, ann)
+
+	var after int
+	db.QueryRow(`SELECT COUNT(*) FROM activity_events WHERE group_id = ?`, groupID).Scan(&after)
+	if after != before {
+		t.Errorf("a pass wrote %d activity event(s); the board showing the new name is the whole mechanism",
+			after-before)
+	}
+}
+
 // --- editing ----------------------------------------------------------------
 
 // Editing is open to every member, and the group sees a diff phrased the way a

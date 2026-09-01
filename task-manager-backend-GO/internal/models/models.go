@@ -163,6 +163,13 @@ type Occurrence struct {
 	// which is a fact the board could show but deliberately does not: the debt
 	// is a scheduling rule, not something to caption on a person's row.
 	ResumeAfter *string `json:"resume_after,omitempty"`
+	// PassedFrom is whoever passed this occurrence away (F5). The debt stays
+	// with them through a chain of passes: passing on is declining a favour,
+	// not a duty, so it does not move the turn onto the person who declined.
+	PassedFrom *string `json:"passed_from,omitempty"`
+	// PassedAt is when it last changed hands, which is when it became the
+	// current holder's turn.
+	PassedAt *time.Time `json:"passed_at,omitempty"`
 
 	// ChoreName and DoneLine are joined in so the board can render a row
 	// without a second round trip per occurrence.

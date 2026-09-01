@@ -35,7 +35,7 @@ const choreColumns = `id, group_id, name, done_line, schedule_type, interval_day
 // returns rows that are renderable as they stand.
 const occurrenceColumns = `o.id, o.chore_id, o.group_id, o.assigned_to, o.status,
 	o.due_date, o.done_by, o.done_at, o.created_at, o.spawned_from, o.resume_after,
-	c.name, c.done_line`
+	o.passed_from, o.passed_at, c.name, c.done_line`
 
 // undoWindow is how long after marking an occurrence done it can still be taken
 // back, and only by the person who marked it. Anything older is history, and
@@ -711,6 +711,103 @@ func (h *ChoreHandler) rollForwardFixedDates(groupID string) error {
 	return nil
 }
 
+// PassOccurrence handles POST /groups/{group_id}/occurrences/{occurrence_id}/pass
+// — F5's busy pass, one of the only two ways an assigned chore leaves you
+// without being done.
+//
+// It moves the chore to the next person in the rotation and nothing else: no
+// approval, no reason, no cap, no penalty. That is deliberate. A pass that cost
+// something would be a pass people avoid using honestly, and the whole point is
+// to replace "I can't this week, sorry, I know it's my turn…" with a state
+// change the household can simply see.
+//
+// What it does *not* do is delete the turn. `passed_from` keeps the debt with
+// whoever passed, so when the chore is finally done the next one comes back to
+// them — see nextTurn. Declaring busy defers your turn; it never cancels it.
+//
+// No activity event is written. The spec allows group-wide broadcasts only for
+// membership and chore edits, and gives passes exactly one notification: a
+// private one to the receiver. A feed line saying "demo passed Kitchen to mate"
+// would be a group announcement that someone declined — which is the social
+// pressure this feature exists to remove. The board showing the new name is the
+// intended mechanism, and that is enough.
+func (h *ChoreHandler) PassOccurrence(w http.ResponseWriter, r *http.Request) {
+	groupID := r.PathValue("group_id")
+	occurrenceID := r.PathValue("occurrence_id")
+	userID := middleware.GetUserID(r)
+
+	current, err := h.loadOccurrence(occurrenceID)
+	if err == sql.ErrNoRows || (current != nil && current.GroupID != groupID) {
+		jsonError(w, "occurrence not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// "On any open occurrence of yours." Passing something already done means
+	// nothing, and passing somebody else's turn would be handing out work.
+	if current.Status != models.OccurrenceOpen {
+		jsonError(w, "only an open occurrence can be passed", http.StatusConflict)
+		return
+	}
+	if current.AssignedTo != userID {
+		jsonError(w, "only the person it is assigned to can pass it", http.StatusForbidden)
+		return
+	}
+
+	chore, err := h.loadChore(current.ChoreID)
+	if err != nil {
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	receiver := nextInRotation(chore.Rotation, current.AssignedTo)
+	if receiver == current.AssignedTo {
+		// A rotation of one. There is nobody to pass to, and saying so is
+		// better than silently doing nothing and looking broken.
+		jsonError(w, "there is nobody else in this chore's rotation", http.StatusConflict)
+		return
+	}
+
+	// "If it was already due, the new assignee's due date becomes tomorrow
+	// (earliest convenience); otherwise it keeps its date." Receiving something
+	// that is already late with today's deadline attached would make a favour
+	// feel like a penalty.
+	now := time.Now()
+	dueDate := current.DueDate
+	if dueDate != nil && dueDate.Before(now) {
+		tomorrow := atClockTime(now.AddDate(0, 0, 1), chore.NeededByTime)
+		dueDate = &tomorrow
+	}
+
+	// The debt stays with whoever first passed it. A chain of passes does not
+	// move the obligation down the chain: passing on declines a favour, not a
+	// duty, so the second passer's own turn is untouched.
+	passedFrom := current.PassedFrom
+	if passedFrom == nil {
+		passedFrom = &current.AssignedTo
+	}
+
+	if _, err := h.DB.Exec(
+		`UPDATE occurrences
+		 SET assigned_to = ?, due_date = ?, passed_from = ?, passed_at = ?
+		 WHERE id = ?`,
+		receiver, dueDate, passedFrom, now.UTC(), occurrenceID,
+	); err != nil {
+		log.Printf("PassOccurrence: update failed for %s: %v", occurrenceID, err)
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	updated, err := h.loadOccurrence(occurrenceID)
+	if err != nil {
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	jsonResponse(w, http.StatusOK, updated)
+}
+
 // spawnNext creates the occurrence that follows a completed one.
 //
 // Rotation advances **on completion, never on the calendar** — this function is
@@ -777,17 +874,30 @@ func spawnNext(tx *sql.Tx, chore *models.Chore, completed *models.Occurrence, do
 // Returns the next assignee, and the resume point to carry on that occurrence
 // (nil when the rotation is running normally).
 func nextTurn(rotation []string, completed *models.Occurrence, doerID string) (assignee string, resumeAfter *string) {
-	if doerID != completed.AssignedTo {
-		// A cover. The debt goes back to whoever it was assigned to, and the
-		// rotation will pick up after whoever actually did it.
-		doer := doerID
-		return completed.AssignedTo, &doer
+	// Whose turn this actually was. A busy pass (F5) moves the name on the
+	// board without moving the obligation: the person who passed it still owes
+	// this turn, so they are the one the debt returns to.
+	//
+	// This is why a pass needs no rule of its own. Whoever ends up doing a
+	// passed chore is doing it for the passer, which is exactly a voluntary
+	// cover, and the same two lines below handle both.
+	owedBy := completed.AssignedTo
+	if completed.PassedFrom != nil {
+		owedBy = *completed.PassedFrom
 	}
 
-	// Completed by its own assignee. If this was a debt being repaid, the
-	// rotation resumes after the person who covered — not after the repayer,
-	// who would otherwise hand the next turn straight back to their coverer.
-	from := completed.AssignedTo
+	if doerID != owedBy {
+		// A cover. The debt goes back to whoever owed the turn, and the
+		// rotation will pick up after whoever actually did it.
+		doer := doerID
+		return owedBy, &doer
+	}
+
+	// Completed by the person whose turn it was. If this was a debt being
+	// repaid, the rotation resumes after the person who covered — not after the
+	// repayer, who would otherwise hand the next turn straight back to their
+	// coverer.
+	from := owedBy
 	if completed.ResumeAfter != nil {
 		from = *completed.ResumeAfter
 	}
@@ -850,7 +960,7 @@ func scanOccurrence(s scanner, o *models.Occurrence) error {
 	return s.Scan(
 		&o.ID, &o.ChoreID, &o.GroupID, &o.AssignedTo, &o.Status,
 		&o.DueDate, &o.DoneBy, &o.DoneAt, &o.CreatedAt, &o.SpawnedFrom, &o.ResumeAfter,
-		&o.ChoreName, &o.DoneLine,
+		&o.PassedFrom, &o.PassedAt, &o.ChoreName, &o.DoneLine,
 	)
 }
 

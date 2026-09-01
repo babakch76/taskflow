@@ -190,6 +190,19 @@ func migrate(db *sql.DB) error {
 		-- Without it the repayment would look like an ordinary turn and the
 		-- coverer would be asked to go again immediately.
 		resume_after TEXT REFERENCES users(id),
+		-- Who passed this occurrence away, if anyone (F5's busy pass).
+		--
+		-- The debt belongs to whoever's turn it *was*, so this survives a chain
+		-- of passes: if A passes to B and B passes on to C, A still owes it. B
+		-- declined a favour, not a duty — B's own turn comes round untouched.
+		--
+		-- It is what lets a pass reuse the turn rule instead of growing a second
+		-- copy of it: whoever finally does the chore is doing it for the passer,
+		-- which is exactly a voluntary cover.
+		passed_from TEXT REFERENCES users(id),
+		-- When it last changed hands. The receiver's "your turn" reminder is
+		-- measured from this rather than from creation, which may be weeks old.
+		passed_at   DATETIME,
 
 		-- done_by and done_at travel together: either both set (a completion) or
 		-- both NULL (still open, or an undone completion). Neither half alone
@@ -260,6 +273,8 @@ func addMissingColumns(db *sql.DB) error {
 		// F3. A literal is a constant default, so unlike updated_at these can be
 		// added NOT NULL and existing users get the standard window rather than
 		// a NULL that every caller would have to interpret.
+		{table: "occurrences", name: "passed_from", ddl: `ALTER TABLE occurrences ADD COLUMN passed_from TEXT REFERENCES users(id)`},
+		{table: "occurrences", name: "passed_at", ddl: `ALTER TABLE occurrences ADD COLUMN passed_at DATETIME`},
 		{table: "users", name: "quiet_from", ddl: `ALTER TABLE users ADD COLUMN quiet_from TEXT NOT NULL DEFAULT '21:00'`},
 		{table: "users", name: "quiet_to", ddl: `ALTER TABLE users ADD COLUMN quiet_to TEXT NOT NULL DEFAULT '09:00'`},
 	}
