@@ -127,6 +127,9 @@ fun GroupDetailScreen(
     var confirmLeave by remember { mutableStateOf(false) }
     // Task pending deletion — deleting is irreversible, so it goes via a confirm.
     var taskToDelete by remember { mutableStateOf<Task?>(null) }
+    // Same for a chore, which takes more with it: every occurrence, and so the
+    // whole history of who did it.
+    var choreToDelete by remember { mutableStateOf<Chore?>(null) }
     // Detail sheet holds an *id*, not a Task. The Task is looked up from state
     // on each recomposition, so an edit (ours or a teammate's) is reflected
     // instead of the sheet showing the snapshot it opened with.
@@ -468,6 +471,39 @@ fun GroupDetailScreen(
                     choreSubmitting = false
                     if (failure == null) editChoreId = null else choreError = failure
                 }
+            },
+            onDelete = { choreToDelete = chore },
+        )
+    }
+
+    // Deleting a chore takes every occurrence with it, and with them the record
+    // of who did it — so it confirms, and the confirm says that rather than
+    // asking "are you sure?". There is no undelete endpoint and a snackbar that
+    // pretended otherwise would be a lie.
+    choreToDelete?.let { chore ->
+        AlertDialog(
+            onDismissRequest = { choreToDelete = null },
+            title = { Text("Delete ${chore.name}?") },
+            text = {
+                Text(
+                    "This removes the chore, whoever's turn it currently is, and " +
+                        "the history of every time it has been done. It cannot be undone.",
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        choreToDelete = null
+                        editChoreId = null
+                        viewModel.deleteChore(chore.id)
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                    ),
+                ) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { choreToDelete = null }) { Text("Cancel") }
             },
         )
     }
@@ -1989,6 +2025,7 @@ private fun EditChoreDialog(
         fixedWeekdays: List<Int>?,
         rotation: List<String>?,
     ) -> Unit,
+    onDelete: () -> Unit,
 ) {
     var name by remember(chore.id) { mutableStateOf(chore.name) }
     var doneLine by remember(chore.id) { mutableStateOf(chore.doneLine) }
@@ -2134,6 +2171,23 @@ private fun EditChoreDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+
+                // Delete lives here rather than on the occurrence sheet: this
+                // is already the "this chore is wrong" screen, and on a single
+                // occurrence the same button would read as deleting that cycle
+                // rather than the whole rotation.
+                OutlinedButton(
+                    onClick = onDelete,
+                    enabled = !submitting,
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Default.Delete, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Delete chore")
+                }
             }
         },
         confirmButton = {

@@ -557,7 +557,35 @@ settle:
 
 ## Missing features
 
-### F-2 · No way to delete a chore from the app — OPEN
+### F-2 · No way to delete a chore from the app — DONE (2026-09-02)
+
+**Fixed:** "Delete chore" on `EditChoreDialog`, behind a confirm.
+
+It went there rather than on the occurrence sheet because that dialog is
+already the "this chore is wrong" screen; on a single occurrence the same
+button reads as deleting *that cycle* rather than the whole rotation.
+
+The confirm says what is lost instead of asking "are you sure?": *"This removes
+the chore, whoever's turn it currently is, and the history of every time it has
+been done. It cannot be undone."* There is no undelete endpoint, and a snackbar
+pretending otherwise would be a lie — the same reasoning that governs task
+delete.
+
+**Left open to every member**, consistent with everything else about chores
+since the manager role went (F2/F4). It is the most destructive thing in the
+app, so it is worth naming in the report as a deliberate choice rather than an
+oversight.
+
+Nothing behind it needed writing: the endpoint, `deleteChore` on the API
+service and `deleteChore` on the ViewModel had all existed since F2 and had
+simply never been reachable.
+
+Verified on the emulator: `DELETE /groups/{id}/chores/{id}` → 204, and the
+chore and its open occurrence both left the board.
+
+Original report follows.
+
+### F-2 · No way to delete a chore from the app — was OPEN
 
 **Asked by Babak**, 2026-09-02: "why is there no option to delete a chore?"
 
