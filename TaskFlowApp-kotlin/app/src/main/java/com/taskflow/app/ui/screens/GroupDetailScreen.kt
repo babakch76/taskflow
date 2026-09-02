@@ -318,8 +318,6 @@ fun GroupDetailScreen(
                 )
 
                 else -> {
-                    state.group?.let { ProgressHeader(it.totalTasks, it.doneTasks, it.progress) }
-
                     run {
                         // Fixed, not scrollable: three labels fit a phone's
                         // width. It was scrollable while there were four.
@@ -608,33 +606,21 @@ fun GroupDetailScreen(
 // Header / states
 // ═══════════════════════════════════════════════════════════════
 
-@Composable
-private fun ProgressHeader(total: Int, done: Int, progress: Double) {
-    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text(
-                text = if (total == 0) "No tasks yet" else "$done of $total done",
-                style = MaterialTheme.typography.labelLarge,
-            )
-            Text(
-                text = "${(progress * 100).toInt()}%",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
-            )
-        }
-        Spacer(Modifier.height(6.dp))
-        LinearProgressIndicator(
-            progress = { progress.toFloat() },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(6.dp)
-                .clip(MaterialTheme.shapes.small),
-        )
-    }
-}
+// There was a ProgressHeader here: "5 of 8 done", a percentage, and a filling
+// bar above the tabs. It was v1 furniture that outlived the pivot.
+//
+// Constraint 4 forbids "points, streaks, leaderboards, or gamification", and
+// the spec's note under history is flatter still: "No points, ranks, streaks,
+// percentages, or comparisons drawn by the app. The data is presented;
+// conclusions are the household's business." A completion percentage is a
+// conclusion, and because it counted the whole group's rows it was a verdict on
+// the household's week — the shame signal constraints 3 and 4 exist to keep
+// out. It was also wrong: it counted `tasks` only and never saw an occurrence,
+// so it reported a number for a fraction of the board.
+//
+// GroupWithProgress still carries total_tasks/done_tasks/progress and the API
+// still returns them. Nothing reads them now, and that is fine — the endpoint
+// is shared and the fields cost nothing.
 
 @Composable
 private fun LoadingBlock(label: String) {

@@ -226,7 +226,22 @@ decide what the sheet should do with the legacy tasks that already have a null
 
 ---
 
-### B-10 · The board still wears a completion percentage — OPEN
+### B-10 · The board still wears a completion percentage — DONE (2026-09-02)
+
+**Fixed:** `ProgressHeader` and its one call site are gone. The board now goes
+straight from the app bar to the tabs.
+
+Removed ahead of retaking the report screenshots, so the deck does not preserve
+a constraint 4 violation in the images the report is graded on — it sat at the
+top of nearly every board, dialog and away-banner shot.
+
+`GroupWithProgress` still carries `total_tasks`/`done_tasks`/`progress` and the
+API still returns them; nothing reads them now. The endpoint is shared and the
+fields cost nothing, so they stay rather than becoming a backend change.
+
+Original report follows.
+
+### B-10 · The board still wears a completion percentage — was OPEN
 
 **Reported:** 2026-09-01, while device-verifying phase 1 of the UI cleanup. Not
 in that prompt's scope; raised rather than improvised on.
