@@ -471,7 +471,7 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
      * from the board a week later.
      */
     fun passOccurrence(occurrence: Occurrence) {
-        runAction(successMessage = "Passed on — it comes back to you next time") {
+        runAction(successMessage = "Passed on. It comes back to you next time") {
             api.passOccurrence(groupId, occurrence.id)
         }
     }

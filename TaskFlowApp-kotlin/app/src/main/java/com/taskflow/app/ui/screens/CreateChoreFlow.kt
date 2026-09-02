@@ -13,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -28,6 +29,7 @@ import com.taskflow.app.data.model.ScheduleType
 import java.time.DayOfWeek
 import java.time.OffsetDateTime
 import java.time.format.TextStyle
+import kotlinx.coroutines.launch
 import java.util.Locale
 
 /**
@@ -301,43 +303,61 @@ private fun StepOne(draft: ChoreDraft, onDraft: (ChoreDraft) -> Unit) {
     )
 
     Spacer(Modifier.height(2.dp))
-    Text(
-        "How do you know it's time to do it?",
-        style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.Bold,
-    )
+    Text("How often?", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
 
-    // The four answers, in the deck's words. The type each one implies is never
-    // shown; it is confirmed back on the board afterwards in the app's own
-    // wording ("every 4 days", "Tuesdays", "as needed").
+    // Four labels a person can scan, and the explanation behind a "?" for
+    // anyone who wants it.
+    //
+    // The deck spelt each option out as a sentence with an example underneath,
+    // which made the first thing you meet a page of prose. Two of them also
+    // asked you to work out what they meant: "a while since it was last done"
+    // never says the thing it is actually asking for, which is a number of
+    // days. The schedule types still are not named; the labels just say what
+    // the answer *is* instead of describing the situation it comes from.
     KindOption(
         selected = draft.kind == ChoreKind.INTERVAL,
-        title = "A while since it was last done",
-        example = "The bathroom, the floors — it builds up again after a few days.",
+        title = "Every so many days",
+        help = "You pick the number of days. It is counted from the last time it " +
+            "was done, so doing it late moves the next turn along with it.",
         onClick = { onDraft(draft.copy(kind = ChoreKind.INTERVAL)) },
     )
     KindOption(
         selected = draft.kind == ChoreKind.FIXED_DATE,
-        title = "A particular day decides it",
-        example = "Bin collection on Tuesday, rent on the 1st.",
+        title = "A fixed day of the week or month",
+        help = "The calendar decides it. Bin collection on Tuesday, rent on the 1st.",
         onClick = { onDraft(draft.copy(kind = ChoreKind.FIXED_DATE)) },
     )
     KindOption(
         selected = draft.kind == ChoreKind.AS_NEEDED,
-        title = "You can just see it needs doing",
-        example = "The bin's full, the bulb's gone. No schedule — it takes a turn each time.",
+        title = "As needed",
+        help = "No schedule at all. It sits on the board as someone's turn until " +
+            "it is done, whenever that turns out to be.",
         onClick = { onDraft(draft.copy(kind = ChoreKind.AS_NEEDED)) },
     )
     KindOption(
         selected = draft.kind == ChoreKind.ONE_OFF,
-        title = "It's a one-time thing",
-        example = "A repair, a delivery, a bill to pay once.",
+        title = "A one-time thing",
+        help = "A repair, a delivery, a bill to pay once. It is assigned to one " +
+            "person and does not come round again.",
         onClick = { onDraft(draft.copy(kind = ChoreKind.ONE_OFF)) },
     )
 }
 
+/**
+ * One answer, with its explanation tucked behind a "?".
+ *
+ * Persistent rather than timed: the tooltip stays until it is dismissed, by
+ * tapping the "?" again or tapping anywhere else. A timeout would be a race
+ * against the reader, and two sentences is longer than any sensible timeout.
+ * It is Material's own tooltip, so it behaves the way the "?" does everywhere
+ * else on the phone.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun KindOption(selected: Boolean, title: String, example: String, onClick: () -> Unit) {
+private fun KindOption(selected: Boolean, title: String, help: String, onClick: () -> Unit) {
+    val tip = rememberTooltipState(isPersistent = true)
+    val scope = rememberCoroutineScope()
+
     Surface(
         onClick = onClick,
         shape = MaterialTheme.shapes.medium,
@@ -350,21 +370,34 @@ private fun KindOption(selected: Boolean, title: String, example: String, onClic
         ),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
+        Row(
+            modifier = Modifier.padding(start = 14.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text(
                 text = title,
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.SemiBold,
                 color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
                 else MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(vertical = 10.dp),
             )
-            Spacer(Modifier.height(3.dp))
-            Text(
-                text = example,
-                style = MaterialTheme.typography.bodySmall,
-                color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = .8f)
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            TooltipBox(
+                positionProvider = TooltipDefaults.rememberRichTooltipPositionProvider(),
+                tooltip = { RichTooltip { Text(help) } },
+                state = tip,
+            ) {
+                IconButton(onClick = { scope.launch { tip.show() } }) {
+                    Icon(
+                        Icons.Outlined.HelpOutline,
+                        contentDescription = "What \"$title\" means",
+                        tint = if (selected) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = .7f)
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
     }
 }
@@ -544,9 +577,9 @@ private fun FixedDateBlock(draft: ChoreDraft, onDraft: (ChoreDraft) -> Unit) {
     Text(
         text = if (draft.byWeekday) {
             "The date comes from the calendar. Miss it and it rolls to the next " +
-                "${weekdayLabel(draft.weekday)} — still yours."
+                "${weekdayLabel(draft.weekday)}, and it is still yours."
         } else {
-            "The date comes from the calendar. Miss it and it rolls to the next month — still yours."
+            "The date comes from the calendar. Miss it and it rolls to the next month, and it is still yours."
         },
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -559,7 +592,7 @@ private fun AsNeededBlock() {
     Text("No date on this one", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
     Text(
         "It sits on the board as someone's turn until it's done. Nothing is due, " +
-            "and there are no date reminders — only a nudge when a turn starts.",
+            "and there are no date reminders, just a nudge when a turn starts.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )

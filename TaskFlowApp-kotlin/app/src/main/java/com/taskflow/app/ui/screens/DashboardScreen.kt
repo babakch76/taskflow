@@ -778,7 +778,7 @@ private fun QuietHoursDialog(
                     )
                 }
                 Text(
-                    "Reminders won't arrive between these times. Anything due in that window waits until it's over — nothing is lost.",
+                    "Reminders won't arrive between these times. Anything due in that window waits until it's over, so nothing is lost.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

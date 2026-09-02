@@ -152,6 +152,30 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
   screens and Keep editing returns to the form. The new row lands highlighted
   with a "{Chore} added." snackbar.
 
+- **v2 UI phase 3, copy revision — DONE** (2026-09-02). Babak's call, and a
+  deliberate departure from the deck, whose copy the prompt had made canonical.
+  - Screen 1's chooser was a wall of prose: four sentence-length labels each
+    with an example underneath. Two of them did not say what they meant —
+    "a while since it was last done" never mentions the thing it is actually
+    asking for, which is a number of days.
+  - The heading is now **"How often?"** and the four labels are **Every so many
+    days / A fixed day of the week or month / As needed / A one-time thing**.
+    The schedule types are still never named; the labels just say what the
+    answer *is* rather than describing the situation it comes from.
+  - The explanations moved behind a **circled "?"** on each row, using
+    Material's own tooltip so it behaves the way a "?" does elsewhere on the
+    phone. **Persistent, not timed:** it stays until dismissed by tapping
+    outside or tapping the "?" again. A timeout would be a race against the
+    reader, and two sentences outlast any sensible one. Tapping the "?" does
+    not select the option.
+  - **Long dashes are out of every user-facing string in the app**, not just
+    the new ones: the away banner, quiet hours, the pass confirmation and
+    message, the occurrence sheet, the rotation note. Empty-value placeholders
+    that were a bare dash now say "Nobody" and "Not recorded".
+  **Note for the report:** the app's copy and the research deck now differ here.
+  The deck remains the stimulus that was designed; if the housemate sessions run
+  against the app, they test these labels instead.
+
 - **The board is the screen — DONE** (2026-09-02, UI cleanup phase 3), in four
   commits:
   - **Calendar tab deleted.** It read `state.tasks` only, so it showed the

@@ -845,7 +845,7 @@ private fun AwayBanner(onBack: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "You're away — chores are passing over you",
+                text = "You're away. Chores are passing over you",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
@@ -1290,13 +1290,13 @@ private fun OccurrenceDetailSheet(
             HorizontalDivider()
 
             // This cycle.
-            DetailRow("Whose turn", assignee ?: "—")
+            DetailRow("Whose turn", assignee ?: "Nobody")
             DetailRow(
                 "Due",
                 occurrence.dueDate?.let { formatDueDate(it) }
                     // As-needed chores genuinely have no date. Saying so beats
                     // an empty field, which reads like missing data.
-                    ?: "No date — it waits until it's needed",
+                    ?: "No date. It waits until it's needed",
             )
 
             // A passed chore says where it came from, so the receiver knows why
@@ -1315,7 +1315,7 @@ private fun OccurrenceDetailSheet(
             }
 
             if (!occurrence.isOpen) {
-                DetailRow("Done by", doer ?: "—")
+                DetailRow("Done by", doer ?: "Not recorded")
                 DetailRow("Done", formatStamp(occurrence.doneAt))
                 // Who the turn actually belonged to: the passer if it was
                 // passed, otherwise whoever it was assigned to.
@@ -1337,7 +1337,7 @@ private fun OccurrenceDetailSheet(
             if (occurrence.isOpen && occurrence.assignedTo == myUserId) {
                 HorizontalDivider()
                 OutlinedButton(onClick = onPass, modifier = Modifier.fillMaxWidth()) {
-                    Text("Busy — pass it on")
+                    Text("Busy? Pass it on")
                 }
                 Text(
                     "Goes to the next person in the rotation. It comes back to you next " +
@@ -1935,7 +1935,7 @@ private fun ChoreHistorySheet(
                             text = buildString {
                                 append("${row.username} away from ${formatDueDate(row.startedAt)}")
                                 row.finishedAt?.let { append(" to ${formatDueDate(it)}") }
-                                    ?: append(" — still away")
+                                    ?: append(", still away")
                             },
                             style = MaterialTheme.typography.bodySmall,
                             fontStyle = FontStyle.Italic,
@@ -2079,7 +2079,7 @@ private fun AwayDialog(
                 )
                 Text(
                     "This is for actually being away. If you're sleeping at home but this week " +
-                        "is bad, use \"Busy — pass it on\" on the chore instead.",
+                        "is bad, use \"Busy? Pass it on\" on the chore instead.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -2292,7 +2292,7 @@ private fun EditChoreDialog(
                     }
                 }
                 Text(
-                    "Reordering changes who comes next, not whose turn it is now — " +
+                    "Reordering changes who comes next, not whose turn it is now. " +
                         "an open chore stays with whoever has it until it's done.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
