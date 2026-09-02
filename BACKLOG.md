@@ -103,6 +103,11 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
     retires the generous reading of constraint 5 the handoff flagged: there is
     no calendar to defend in the report now. Tabs are **Board / Activity /
     Members**, and a plain `TabRow` again.
+    Written up in full as
+    [`calendar_decision_record.md`](calendar_decision_record.md), which adds the
+    reason the code alone does not show: under completion-anchored rotation a
+    chore has only **one live occurrence**, so a forward-looking month grid has
+    almost nothing to draw. Re-adding one is a spec change, not a UI task.
   - **Quiet hours moved to the Dashboard menu.** It is stored on the user
     record and applies to every group, but it was reached from one group's
     overflow menu. Saving it there now also re-arms every group's alarms,

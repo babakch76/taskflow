@@ -34,6 +34,9 @@ that bite in code:
   cleanup phase 3a) — not to settle the argument but because it only ever read
   `tasks`, so it showed the one-off minority of the work and hid every rotation
   chore. There is now no calendar in the app and nothing to defend.
+  The full reasoning, including why the *data model* cannot fill a month grid,
+  is in [`calendar_decision_record.md`](calendar_decision_record.md). Read that
+  before anyone proposes putting it back.
 
 ---
 
@@ -60,8 +63,17 @@ into one, the Calendar tab deleted, quiet hours moved to the Dashboard, an away
 banner on the board, the tab count fixed, and the simplifications written down
 in 5a. **Phase 4b — retaking every screenshot in `TaskFlow_Screens.pptx` from
 the real build — is the only piece left, and it needs Babak at the emulator.**
-The branch has not been merged into `main`; that is a decision, not an
-oversight waiting to be corrected.
+`ui-cleanup` was merged into `main` on 2 September and pushed, so `main` is the
+tip again; the branch is kept as a readable unit of the pass.
+
+**4b checked 2026-09-02: not done.** The deck's last commit is `0a8f760`
+("Deadlines, manager role, and a group calendar", 2 August) — three weeks
+before the pivot — and the file is unmodified since. Opening the images
+confirms it rather than inferring from the date: seven slides, 29 images,
+showing a **Tasks (8)** tab, **To do** status chips, a **"5 of 8 done · 62%"**
+header, and invented data (Maya, Sam, "The Johnsons"). No Board, no
+Yours / Others / Done, no chores or occurrences anywhere. It is a mock-up of
+the v1 app and must not appear in the report as the current one.
 
 ### Done
 
@@ -132,7 +144,7 @@ happens when the board is read.
 | Decision | Choice |
 |---|---|
 | Manager role | Removed. Nothing is role-gated now. |
-| Calendar | **Deleted** (UI cleanup phase 3a). It was kept as a secondary tab through F1–F6; it never learned about occurrences, and a calendar that does would be the scheduling view constraint 5 rules out. The Board is the screen. |
+| Calendar | **Deleted** (UI cleanup phase 3a). It was kept as a secondary tab through F1–F6; it never learned about occurrences, and a calendar that does would be the scheduling view constraint 5 rules out. The Board is the screen. Reasons in full: [`calendar_decision_record.md`](calendar_decision_record.md) — re-adding a month grid is a **spec change, not a UI task**. |
 | Branching | F1 went to `main`. **F2 and everything after goes on a `v2-chores` integration branch**, so `main` keeps a working demo and installable APK. |
 | Board placement | Replaced the Tasks tab in place, not a new tab. |
 | Navigation | One group → straight to its board; several → the list. |
