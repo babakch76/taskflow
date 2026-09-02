@@ -134,6 +134,7 @@ contentSlide(
   [
     { file: "06-chore-history.png", label: "One chore's history", note: "Two dates, no verdict on either" },
     { file: "11-group-history.png", label: "What's been done", note: "Join order, zeroes included, days away noted" },
+    { file: "10-activity.png", label: "Activity", note: "Every group-visible change, in words" },
     { file: "13-quiet-hours.png", label: "Quiet hours", note: "Held, not dropped — nothing is lost" },
   ],
 );

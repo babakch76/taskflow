@@ -81,9 +81,10 @@ them:
 
 - The progress percentage (B-10) was removed first, so the deck does not
   preserve a constraint 4 violation at the top of every board shot.
-- The **activity feed is deliberately not in the deck** — it still prints
-  `maya: occurrence_done` for every event F2–F6 added (B-16). Fix that before
-  the report if the feed is going to be discussed.
+- The activity feed was going to be left out — it printed `maya:
+  occurrence_done` for every event F2–F6 added. That was fixed instead (B-16),
+  so it is in the deck, and F4's diff broadcast ("Water the plants: schedule:
+  every 3 days → every 4 days") is legible in the app for the first time.
 
 The screenshot household lives in the local scratch database: demo / maya / sam
 in "Flat 3B", chores of all three schedule types, two completed cycles behind
@@ -188,9 +189,16 @@ happens when the board is read.
    `SELECT role, COUNT(*) FROM group_members GROUP BY role;` returns
    `member|5`, `owner|13`, and no `admin`.
 
-3. **Still needs Babak:** close the SSH rule again. AWS console → EC2 →
-   Security Groups → `taskflow-sg` → Inbound rules → remove or narrow the SSH
-   entry. It was opened for the 1–2 September deploy and should not stay open.
+3. ~~**Close the SSH rule again**~~ — done. It was open for the 1–2 September
+   deploys and stopped answering on the afternoon of the 2nd.
+
+   **One consequence:** the live server is a commit behind. B-15 — the chore
+   history `ORDER BY` tiebreaker — landed on `main` after SSH closed and was
+   never deployed. It is a query-ordering fix with no schema change and no
+   client dependency, so nothing is broken by the gap; the live history view
+   can just return two same-second completions in an arbitrary order. Take it
+   with the next deploy, whenever the rule is next open. Everything else on the
+   box matches `main`.
 
 **There are backups now**, which there were not before. `~/backups` on the box
 holds a WAL-safe `sqlite3 .backup` of the database and a copy of the binary it
