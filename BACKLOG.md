@@ -128,7 +128,32 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
 
 ## Bugs
 
-### B-16 · The activity feed still prints raw event types for every v2 event — OPEN
+### B-16 · The activity feed still prints raw event types for every v2 event — DONE (2026-09-02)
+
+**Fixed:** `describeEvent` has the five missing cases, so the feed now reads
+"maya did a chore / Clean the bathroom" and "demo added a chore" instead of
+"maya: occurrence_done". `chore_updated` needed nothing extra — the backend
+already writes the diff in words, and `humaniseDetail` passes it through, so
+F4's broadcast now shows as "maya changed a chore / Water the plants: schedule:
+every 3 days → every 4 days". That sentence is the spec's own example and this
+is the first time it was legible in the app.
+
+`eventColor` gained matching entries: chore creation shares the task-creation
+primary, deletion the destructive red, and a completion takes the same tertiary
+green a done row has. Not a reward — the feed is a record, and it is the one
+entry that says something finished.
+
+The fallback no longer prints the raw identifier: an unknown event now reads
+"$user made a change". That trades a little debuggability for not leaking
+constants into the household's feed; the comment above the function says to add
+the case rather than lean on it.
+
+Verified on the emulator: every row in the seeded feed reads as English, and
+editing a chore through the API produced the diff line above.
+
+Original report follows.
+
+### B-16 · The activity feed still prints raw event types — was OPEN
 
 **Found** 2026-09-02, while shooting the report screenshots — it was in the
 frame, which is how it got noticed.

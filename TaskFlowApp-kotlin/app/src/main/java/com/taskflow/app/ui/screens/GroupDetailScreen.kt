@@ -1453,17 +1453,35 @@ private fun ActivityList(events: List<ActivityEvent>) {
     }
 }
 
-/** Event types come from handlers/activity.go — keep these in sync. */
+/**
+ * Event types come from handlers/activity.go — **keep these in sync**.
+ *
+ * A missing case used to fall through to "maya: occurrence_done", which is how
+ * every event F2 to F6 added read for the whole of v2: the v1 half of the feed
+ * spoke English and the chore half printed its own constants. The fallback no
+ * longer leaks the identifier, so if you add an event to the backend and forget
+ * it here, the feed stays readable — but it also stays vague, and the fix is to
+ * add the case rather than to leave it generic.
+ */
 private fun describeEvent(e: ActivityEvent): String = when (e.eventType) {
     "task_created" -> "${e.actorUsername} added a task"
     "task_updated" -> "${e.actorUsername} updated a task"
     "task_deleted" -> "${e.actorUsername} deleted a task"
     "tasks_bulk_updated" -> "${e.actorUsername} moved several tasks"
+
+    // The chore model (F2–F6). "did" rather than "completed" — the household
+    // says the former, and the detail line underneath names the chore.
+    "chore_created" -> "${e.actorUsername} added a chore"
+    "chore_updated" -> "${e.actorUsername} changed a chore"
+    "chore_deleted" -> "${e.actorUsername} deleted a chore"
+    "occurrence_done" -> "${e.actorUsername} did a chore"
+    "occurrence_reopened" -> "${e.actorUsername} undid a completion"
+
     "member_joined" -> "${e.actorUsername} joined the group"
     "member_left" -> "${e.actorUsername} left the group"
     "invite_accepted" -> "${e.actorUsername} accepted an invite"
     "member_role_changed" -> "${e.actorUsername} changed a member's role"
-    else -> "${e.actorUsername}: ${e.eventType}"
+    else -> "${e.actorUsername} made a change"
 }
 
 /**
@@ -1530,8 +1548,11 @@ private fun humaniseDetail(e: ActivityEvent): String? {
 
 @Composable
 private fun eventColor(type: String) = when (type) {
-    "task_created" -> MaterialTheme.colorScheme.primary
-    "task_deleted", "member_left" -> MaterialTheme.colorScheme.error
+    "task_created", "chore_created" -> MaterialTheme.colorScheme.primary
+    // Completions get the same green a done row does. Not a reward — the feed
+    // is a record, and this is the one entry that says something finished.
+    "occurrence_done" -> MaterialTheme.colorScheme.tertiary
+    "task_deleted", "chore_deleted", "member_left" -> MaterialTheme.colorScheme.error
     "member_joined", "invite_accepted" -> MaterialTheme.colorScheme.tertiary
     else -> MaterialTheme.colorScheme.secondary
 }
