@@ -248,7 +248,27 @@ create dialog, so it needs Babak's call.
 
 ---
 
-### B-15 · Chore-history ordering has no tiebreaker, and the test is flaky — OPEN
+### B-15 · Chore-history ordering has no tiebreaker, and the test is flaky — DONE (2026-09-02)
+
+**Fixed:** `ORDER BY o.done_at DESC, o.rowid DESC`.
+
+The first attempt used `created_at` as the second key and the test still failed
+about one run in four — worth recording, because the obvious fix is the wrong
+one. `created_at` defaults to `CURRENT_TIMESTAMP`, which is whole seconds, so
+it ties in exactly the cases `done_at` does. And `done_at` ties more readily
+than it looks: it comes from `time.Now()`, whose resolution on Windows is coarse
+enough that two writes a few milliseconds apart get the identical value.
+
+`rowid` is insertion order and always distinct, and for a chore's cycles that
+is spawn order — the later cycle cannot have been inserted first. The table has
+no `WITHOUT ROWID`, so it is there to use.
+
+Verified by hammering: ten consecutive runs of the previously flaky test, zero
+failures, then three full-suite runs, zero failures.
+
+Original report follows.
+
+### B-15 · Chore-history ordering has no tiebreaker — was OPEN
 
 **Found** 2026-09-02 while running the full suite for B-13.
 `TestChoreHistoryRecordsWhoActuallyDidIt` failed once in four runs and passes in

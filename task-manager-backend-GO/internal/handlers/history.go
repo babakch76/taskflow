@@ -67,7 +67,19 @@ func (h *ChoreHandler) ChoreHistory(w http.ResponseWriter, r *http.Request) {
 		JOIN users assignee ON assignee.id = o.assigned_to
 		JOIN users doer     ON doer.id = o.done_by
 		WHERE o.chore_id = ? AND o.status = 'done' AND o.done_at IS NOT NULL
-		ORDER BY o.done_at DESC`, choreID)
+		-- rowid breaks the tie, and it has to be rowid rather than created_at.
+		--
+		-- Two completions of the same chore can share a done_at: it comes from
+		-- time.Now(), whose resolution on Windows is coarse enough that two
+		-- writes a few milliseconds apart get the identical value. SQLite is
+		-- then free to return them in either order — a timeline that reshuffles
+		-- between refreshes, and a test that failed about one run in four.
+		--
+		-- created_at is no help: it defaults to CURRENT_TIMESTAMP, which is
+		-- whole seconds, so it ties in exactly the cases done_at does. rowid is
+		-- insertion order and always distinct, and for a chore's cycles that is
+		-- spawn order — the later cycle cannot have been inserted first.
+		ORDER BY o.done_at DESC, o.rowid DESC`, choreID)
 	if err != nil {
 		jsonError(w, "internal error", http.StatusInternalServerError)
 		return
