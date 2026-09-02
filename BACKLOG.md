@@ -128,6 +128,39 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
 
 ## Bugs
 
+### B-16 · The activity feed still prints raw event types for every v2 event — OPEN
+
+**Found** 2026-09-02, while shooting the report screenshots — it was in the
+frame, which is how it got noticed.
+
+`describeEvent` (`GroupDetailScreen.kt` ~1457) humanises the v1 events and has
+no case for any of the ones F2–F6 added, so they fall through to
+`"${actorUsername}: ${eventType}"`. The feed reads:
+
+```
+maya: occurrence_done
+demo: chore_created
+demo: chore_updated
+```
+
+The v1 half of the same feed says "demo added a task". This is the defect the
+backlog already closed once — "Activity feed leaks developer strings", round 1
+— reopened by the pivot, because the chore events were never added to the map.
+
+Missing cases, from `handlers/activity.go`: `chore_created`, `chore_updated`,
+`chore_deleted`, `occurrence_done`, `occurrence_reopened`.
+
+**Fix:** five lines in `describeEvent`, plus a look at `humaniseDetail` for the
+second line — `chore_updated` carries the edit diff the backend already phrases
+("weekly → every 3 days"), which is the good half of F4 and currently renders
+unlabelled underneath a debug string.
+
+Worth doing before the report: the activity feed is the app's most visible
+shared surface and it is the one screen deliberately left out of the deck
+because of this.
+
+---
+
 ### B-13 · A fixed-date chore done early came back due the same day — DONE (2026-09-02)
 
 **Reported by Babak**, 2026-09-02: a repeating chore completed before its due

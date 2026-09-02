@@ -66,14 +66,30 @@ the real build — is the only piece left, and it needs Babak at the emulator.**
 `ui-cleanup` was merged into `main` on 2 September and pushed, so `main` is the
 tip again; the branch is kept as a readable unit of the pass.
 
-**4b checked 2026-09-02: not done.** The deck's last commit is `0a8f760`
-("Deadlines, manager role, and a group calendar", 2 August) — three weeks
-before the pivot — and the file is unmodified since. Opening the images
-confirms it rather than inferring from the date: seven slides, 29 images,
-showing a **Tasks (8)** tab, **To do** status chips, a **"5 of 8 done · 62%"**
-header, and invented data (Maya, Sam, "The Johnsons"). No Board, no
-Yours / Others / Done, no chores or occurrences anywhere. It is a mock-up of
-the v1 app and must not appear in the report as the current one.
+**4b is done** (2026-09-02). `TaskFlow_Screens.pptx` was rebuilt from
+screenshots of the real build — same filename, so the report's link still
+resolves. Five slides, 16 screens, every one captured on the emulator against a
+running backend.
+
+What it replaced, for the record: seven slides of pre-pivot mock-ups, last
+committed in `0a8f760` on 2 August — a **Tasks (8)** tab, **To do** status
+chips, a **"5 of 8 done · 62%"** header and invented data. Not one image of the
+v2 app.
+
+Two things were fixed rather than photographed around, because the camera found
+them:
+
+- The progress percentage (B-10) was removed first, so the deck does not
+  preserve a constraint 4 violation at the top of every board shot.
+- The **activity feed is deliberately not in the deck** — it still prints
+  `maya: occurrence_done` for every event F2–F6 added (B-16). Fix that before
+  the report if the feed is going to be discussed.
+
+The screenshot household lives in the local scratch database: demo / maya / sam
+in "Flat 3B", chores of all three schedule types, two completed cycles behind
+the bathroom, one overdue one-off, one done row, and sam away. It is gitignored
+and will not survive a `rm` of `task-manager-backend-GO/taskmanager.db` — the
+seeding script is in the scratchpad if it needs rebuilding.
 
 ### Done
 
