@@ -113,8 +113,12 @@ fun GroupDetailScreen(
 
     var selectedTab by remember { mutableIntStateOf(0) }
     // One create flow, not two. Whether the thing repeats is a question inside
-    // the form, not a choice of button — see CreateEntryDialog.
+    // the form, not a choice of button — see CreateChoreFlow.
     var showCreate by remember { mutableStateOf(false) }
+    // The name of the thing just added, so its row can be picked out of the
+    // board for a moment. Cleared on a timer: a highlight that stays is just a
+    // second kind of status.
+    var justAdded by remember { mutableStateOf<String?>(null) }
     var showAway by remember { mutableStateOf(false) }
     // Which history is open. The chore name is held alongside so the sheet has
     // a title before its data arrives.
@@ -209,6 +213,15 @@ fun GroupDetailScreen(
             myUserId = myUserId,
             quiet = QuietHours.parse(state.quietFrom, state.quietTo),
         )
+    }
+
+    // The new row is marked for a moment so it can be found without hunting,
+    // then stops being marked. A highlight that stays is a second status.
+    LaunchedEffect(justAdded) {
+        if (justAdded != null) {
+            delay(2_500)
+            justAdded = null
+        }
     }
 
     LaunchedEffect(state.message) {
@@ -380,6 +393,7 @@ fun GroupDetailScreen(
                             rows = state.occurrences.map { BoardRow.OccurrenceRow(it) } +
                                 state.tasks.map { BoardRow.TaskRow(it) },
                             chores = state.chores,
+                            justAdded = justAdded,
                             members = state.members,
                             myUserId = myUserId,
                             onOpenDetail = { row ->
@@ -525,34 +539,53 @@ fun GroupDetailScreen(
     }
 
     if (showCreate) {
-        CreateEntryDialog(
+        CreateChoreFlow(
             members = state.members,
             myUserId = myUserId,
             submitting = createSubmitting,
             serverError = createError,
             onDismiss = { showCreate = false; createError = null },
-            // Two write paths behind one form. Neither is changed by the merge:
-            // a one-off is still a task, a repeating chore is still a chore, and
-            // the branch is decided by the "Does this repeat?" answer alone.
+            // Two write paths behind one flow, and the flow does not know which
+            // it is using: a one-off is still a task, the three rotating kinds
+            // are still chores, and the split is decided here from the answer
+            // given on screen 1.
             //
-            // The dialog stays up until the write lands. Closing first and
-            // reporting afterwards threw away everything typed into it (B-7).
-            onCreateOneOff = { name, doneLine, assignee, dueDate ->
+            // It stays open until the write lands. Closing first and reporting
+            // afterwards threw away everything typed into it (B-7).
+            onSubmit = { draft ->
                 createSubmitting = true
                 createError = null
-                viewModel.createTask(name, doneLine, assignee, dueDate) { failure ->
+                val settle = { failure: String? ->
                     createSubmitting = false
-                    if (failure == null) showCreate = false else createError = failure
+                    if (failure == null) {
+                        showCreate = false
+                        justAdded = draft.name.trim()
+                    } else {
+                        createError = failure
+                    }
                 }
-            },
-            onCreateRepeating = { name, doneLine, scheduleType, intervalDays, weekdays, rotation ->
-                createSubmitting = true
-                createError = null
-                viewModel.createChore(
-                    name, doneLine, scheduleType, intervalDays, weekdays, rotation,
-                ) { failure ->
-                    createSubmitting = false
-                    if (failure == null) showCreate = false else createError = failure
+                if (draft.kind == ChoreKind.ONE_OFF) {
+                    viewModel.createTask(
+                        draft.name,
+                        draft.doneLine,
+                        draft.assignee ?: myUserId,
+                        draft.dueDate?.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+                        settle,
+                    )
+                } else {
+                    viewModel.createChore(
+                        name = draft.name,
+                        doneLine = draft.doneLine,
+                        scheduleType = draft.kind?.scheduleType ?: ScheduleType.INTERVAL,
+                        intervalDays = draft.intervalDays.takeIf { draft.kind == ChoreKind.INTERVAL },
+                        fixedWeekdays = listOf(draft.weekday)
+                            .takeIf { draft.kind == ChoreKind.FIXED_DATE && draft.byWeekday },
+                        rotation = draft.rotation,
+                        fixedMonthDays = listOf(draft.monthDay)
+                            .takeIf { draft.kind == ChoreKind.FIXED_DATE && !draft.byWeekday },
+                        neededByTime = draft.neededBy?.takeIf { draft.kind != ChoreKind.AS_NEEDED },
+                        onResult = settle,
+                    )
                 }
             },
         )
@@ -838,6 +871,7 @@ private fun AwayBanner(onBack: () -> Unit) {
 private fun TaskList(
     rows: List<BoardRow>,
     chores: List<Chore>,
+    justAdded: String?,
     members: List<MemberInfo>,
     myUserId: String?,
     onOpenDetail: (BoardRow) -> Unit,
@@ -891,6 +925,7 @@ private fun TaskList(
                 TaskCard(
                     row = row,
                     scheduleText = scheduleLineFor(row, chores),
+                    highlighted = justAdded != null && row.title.equals(justAdded, ignoreCase = true),
                     assigneeName = members.firstOrNull { it.id == row.assignedTo }?.username,
                     doneByName = members.firstOrNull { it.id == row.doneBy }?.username,
                     myUserId = myUserId,
@@ -990,6 +1025,7 @@ private fun cycleLineFor(
 private fun TaskCard(
     row: BoardRow,
     scheduleText: String?,
+    highlighted: Boolean,
     assigneeName: String?,
     doneByName: String?,
     myUserId: String?,
@@ -1042,7 +1078,8 @@ private fun TaskCard(
             .fillMaxWidth()
             .clickable(onClick = onOpenDetail),
         colors = CardDefaults.elevatedCardColors(
-            containerColor = MaterialTheme.colorScheme.surface,
+            containerColor = if (highlighted) MaterialTheme.colorScheme.primaryContainer
+            else MaterialTheme.colorScheme.surface,
         ),
         elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
     ) {
@@ -2332,386 +2369,11 @@ private fun EditChoreDialog(
     )
 }
 
-/**
- * One create form for everything that lands on the board.
- *
- * There used to be two dialogs behind two buttons — New Chore and New Task —
- * which asked the household to choose a storage model before it could write
- * anything down. Nobody adding "hoover the stairs" is deciding between a chore
- * definition and a one-off task; they are deciding whether it comes round again.
- * So the form asks that, in those words, and branches on the answer.
- *
- * What is behind each branch is unchanged. *One time* submits through the task
- * create path, *Repeats* through the chore create path, and neither endpoint
- * knows this merge happened.
- *
- * The shared fields come first because they are shared: a name, and the
- * done-line — offered at creation because that is the moment the household
- * actually agrees what finished looks like. The 140-char cap is the spec's, and
- * it is a treaty rather than a manual. On a one-off it is stored as the task's
- * description, which is the same sentence in the same place on the detail sheet.
- */
-@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
-@Composable
-private fun CreateEntryDialog(
-    members: List<MemberInfo>,
-    myUserId: String?,
-    submitting: Boolean,
-    serverError: String?,
-    onDismiss: () -> Unit,
-    onCreateOneOff: (
-        title: String,
-        description: String,
-        assignedTo: String?,
-        dueDate: String?,
-    ) -> Unit,
-    onCreateRepeating: (
-        name: String,
-        doneLine: String,
-        scheduleType: String,
-        intervalDays: Int?,
-        fixedWeekdays: List<Int>?,
-        rotation: List<String>,
-    ) -> Unit,
-) {
-    var name by remember { mutableStateOf("") }
-    var doneLine by remember { mutableStateOf("") }
-    var repeats by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf<String?>(null) }
-
-    // ─── One time ───
-    // Creator-assigned, per the spec: everything is assigned, always, and the
-    // person writing it down is the sensible default for who does it. There is
-    // deliberately no "Nobody" — an unassigned chore is what this app exists to
-    // stop (constraint 8).
-    //
-    // Held as an id and looked up, not as a MemberInfo: the member list is
-    // refetched by the activity poll while this dialog is open, and a snapshot
-    // would either go stale or reset the choice under the user's finger.
-    var assigneeId by remember { mutableStateOf(myUserId) }
-    val assignee = members.firstOrNull { it.id == assigneeId } ?: members.firstOrNull()
-    var dueDate by remember { mutableStateOf<OffsetDateTime?>(null) }
-    var showDatePicker by remember { mutableStateOf(false) }
-
-    // ─── Repeats ───
-    var scheduleType by remember { mutableStateOf(ScheduleType.INTERVAL) }
-    // Held as text, not an Int: the field has to be allowed to be empty while
-    // someone clears it to type a new number, and an Int has no way to say so.
-    var intervalText by remember { mutableStateOf("7") }
-    var weekday by remember { mutableIntStateOf(2) } // Tuesday
-    // Order matters: this is the turn order, not a set.
-    val rotation = remember { mutableStateListOf<String>() }
-
-    if (showDatePicker) {
-        DueDatePickerDialog(
-            initial = dueDate,
-            onDismiss = { showDatePicker = false },
-            onPicked = { iso ->
-                showDatePicker = false
-                dueDate = OffsetDateTime.parse(iso)
-            },
-        )
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Add a chore", fontWeight = FontWeight.Bold) },
-        text = {
-            Column(
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.verticalScroll(rememberScrollState()),
-            ) {
-                // At the top, not the bottom: this form is taller than the
-                // dialog, and an error under the fold is not feedback — the
-                // button just appears to do nothing.
-                //
-                // The local check wins over the server's: if the user has just
-                // typed something invalid, that is the more useful message, and
-                // the rejection they are reading refers to what they sent last.
-                val shown = error ?: serverError
-                AnimatedVisibility(visible = shown != null) {
-                    Text(
-                        text = shown ?: "",
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it; error = null },
-                    label = { Text("Name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = doneLine,
-                    onValueChange = { if (it.length <= 140) doneLine = it },
-                    label = { Text("What done means (optional)") },
-                    supportingText = { Text("${doneLine.length}/140") },
-                    maxLines = 2,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-
-                // The one question that decides the shape of everything below.
-                // A segmented control rather than another chip row, because this
-                // is not one more attribute among the others — it is the fork.
-                Text("Does this repeat?", style = MaterialTheme.typography.labelMedium)
-                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                    SegmentedButton(
-                        selected = !repeats,
-                        onClick = { repeats = false; error = null },
-                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                    ) { Text("One time") }
-                    SegmentedButton(
-                        selected = repeats,
-                        onClick = { repeats = true; error = null },
-                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                    ) { Text("Repeats") }
-                }
-
-                if (!repeats) {
-                    Text("Whose job", style = MaterialTheme.typography.labelMedium)
-                    // FlowRow, not a fixed Row: a capped chip row used to make
-                    // everyone past the third member silently unassignable.
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        members.forEach { member ->
-                            FilterChip(
-                                selected = assignee?.id == member.id,
-                                onClick = { assigneeId = member.id; error = null },
-                                label = {
-                                    Text(
-                                        buildString {
-                                            append(member.username)
-                                            if (member.id == myUserId) append(" · you")
-                                            if (member.away) append(" · away")
-                                        },
-                                    )
-                                },
-                            )
-                        }
-                    }
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Text(
-                            text = dueDate?.let { "Needed by ${formatDueDate(it)}" }
-                                ?: "No date",
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.weight(1f),
-                        )
-                        if (dueDate != null) {
-                            IconButton(onClick = { dueDate = null }) {
-                                Icon(Icons.Default.Close, contentDescription = "Remove date")
-                            }
-                        }
-                        IconButton(onClick = { showDatePicker = true }) {
-                            Icon(
-                                Icons.Default.CalendarMonth,
-                                contentDescription = if (dueDate == null) "Set a date"
-                                else "Change the date",
-                            )
-                        }
-                    }
-                    Text(
-                        "A date is optional. Without one it just sits with whoever's job it is until it's done.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    Text("How often", style = MaterialTheme.typography.labelMedium)
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        listOf(
-                            ScheduleType.INTERVAL to "Every N days",
-                            ScheduleType.FIXED_DATE to "A fixed day",
-                            ScheduleType.AS_NEEDED to "As needed",
-                        ).forEach { (type, label) ->
-                            FilterChip(
-                                selected = scheduleType == type,
-                                onClick = { scheduleType = type },
-                                label = { Text(label) },
-                            )
-                        }
-                    }
-
-                    when (scheduleType) {
-                        ScheduleType.INTERVAL -> {
-                            // Any whole number of days, typed or stepped. The
-                            // presets below are shortcuts, not the whole choice —
-                            // a fortnightly bin collection has no chip.
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                Text("Every", style = MaterialTheme.typography.bodyMedium)
-                                OutlinedTextField(
-                                    value = intervalText,
-                                    onValueChange = { typed ->
-                                        // Digits only, and short enough that the
-                                        // field can't hold a number the backend
-                                        // will reject on length alone.
-                                        val digits = typed.filter { it.isDigit() }.take(3)
-                                        intervalText = digits
-                                        error = null
-                                    },
-                                    singleLine = true,
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                    modifier = Modifier.width(96.dp),
-                                )
-                                Text(
-                                    if (intervalText.toIntOrNull() == 1) "day" else "days",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                )
-                            }
-
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp),
-                            ) {
-                                listOf(
-                                    1 to "Daily", 7 to "Weekly",
-                                    14 to "Fortnightly", 30 to "Monthly",
-                                ).forEach { (days, label) ->
-                                    FilterChip(
-                                        selected = intervalText.toIntOrNull() == days,
-                                        onClick = { intervalText = days.toString(); error = null },
-                                        label = { Text(label) },
-                                    )
-                                }
-                            }
-
-                            Text(
-                                "Counted from the last time it was done, so doing it late moves the whole schedule.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-
-                        ScheduleType.FIXED_DATE -> {
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp),
-                            ) {
-                                // 0 = Sunday, matching the backend.
-                                listOf(
-                                    1 to "Mon", 2 to "Tue", 3 to "Wed", 4 to "Thu",
-                                    5 to "Fri", 6 to "Sat", 0 to "Sun",
-                                ).forEach { (day, label) ->
-                                    FilterChip(
-                                        selected = weekday == day,
-                                        onClick = { weekday = day },
-                                        label = { Text(label) },
-                                    )
-                                }
-                            }
-                        }
-
-                        else -> {
-                            Text(
-                                "No date — it just sits with whoever's turn it is until it's done.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-
-                    Text("Whose turn, in order", style = MaterialTheme.typography.labelMedium)
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        members.forEach { member ->
-                            val position = rotation.indexOf(member.id)
-                            FilterChip(
-                                selected = position >= 0,
-                                onClick = {
-                                    if (position >= 0) rotation.remove(member.id)
-                                    else rotation.add(member.id)
-                                    error = null
-                                },
-                                label = {
-                                    // Away is shown wherever a name appears in a
-                                    // rotation, per F5. Still selectable: you may
-                                    // well want someone in the order for when they
-                                    // are back; assignment simply steps over them.
-                                    Text(
-                                        buildString {
-                                            if (position >= 0) append("${position + 1}. ")
-                                            append(member.username)
-                                            if (member.away) append(" · away")
-                                        },
-                                    )
-                                },
-                            )
-                        }
-                    }
-                    Text(
-                        "The first person gets the first turn. It moves on only when the chore is actually done.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            Button(onClick = {
-                if (name.isBlank()) {
-                    error = "Name is required"
-                    return@Button
-                }
-                // Checked here rather than left to the backend so the message
-                // names the field the user is looking at.
-                if (!repeats) {
-                    val who = assignee
-                    if (who == null) {
-                        error = "Pick whose job it is"
-                        return@Button
-                    }
-                    onCreateOneOff(
-                        name,
-                        doneLine,
-                        who.id,
-                        dueDate?.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
-                    )
-                } else {
-                    val interval = intervalText.toIntOrNull()
-                    if (scheduleType == ScheduleType.INTERVAL &&
-                        (interval == null || interval !in 1..365)
-                    ) {
-                        error = "How often must be a number of days between 1 and 365"
-                        return@Button
-                    }
-                    if (rotation.isEmpty()) {
-                        error = "Pick at least one person for the rotation"
-                        return@Button
-                    }
-                    onCreateRepeating(
-                        name,
-                        doneLine,
-                        scheduleType,
-                        if (scheduleType == ScheduleType.INTERVAL) interval else null,
-                        if (scheduleType == ScheduleType.FIXED_DATE) listOf(weekday) else null,
-                        rotation.toList(),
-                    )
-                }
-                // Deliberately not closing here — the caller closes it once the
-                // write has actually landed.
-            }, enabled = !submitting) {
-                Text(if (submitting) "Creating…" else "Create")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !submitting) { Text("Cancel") }
-        },
-    )
-}
+// CreateEntryDialog lived here: one AlertDialog with a "Does this repeat?"
+// segmented control branching into two field sets. It is replaced by
+// CreateChoreFlow, which asks how you know it is time rather than whether it
+// repeats, and gives each answer a screen of its own instead of one dialog
+// that scrolled past the fold on a 360dp phone.
 
 @Composable
 private fun InviteByUsernameDialog(onDismiss: () -> Unit, onInvite: (String) -> Unit) {
@@ -2821,7 +2483,7 @@ private fun InviteCodeDialog(code: String, onDismiss: () -> Unit) {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun DueDatePickerDialog(
+internal fun DueDatePickerDialog(
     initial: OffsetDateTime?,
     onDismiss: () -> Unit,
     onPicked: (String) -> Unit,
@@ -2862,7 +2524,7 @@ private fun DueDatePickerDialog(
 }
 
 /** Deadline as a person would read it. Includes the year only when it isn't this one. */
-private fun formatDueDate(due: OffsetDateTime): String {
+internal fun formatDueDate(due: OffsetDateTime): String {
     val local = due.atZoneSameInstant(ZoneId.systemDefault()).toLocalDate()
     val pattern = if (local.year == LocalDate.now().year) "EEE d MMM" else "EEE d MMM yyyy"
     return local.format(DateTimeFormatter.ofPattern(pattern))

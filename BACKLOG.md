@@ -120,6 +120,38 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
   46-character chore name, an as-needed row, an overdue one-off and a done row:
   nothing truncates, the long name wraps to two lines, and nothing is red.
 
+- **v2 UI phase 3 (stepped creation) — DONE** (2026-09-02). Section 3 of the
+  deck. The merged dialog is replaced by a full-screen two-screen flow in
+  `CreateChoreFlow.kt`; `CreateEntryDialog` is deleted.
+  - **The schedule types are never named.** Screen 1 asks *how do you know it's
+    time to do it?* and infers the type from the answer; screen 2 asks only what
+    that answer needs. Reaching "as needed" is a matter of recognising your own
+    situation rather than learning a taxonomy — which is the thing the housemate
+    sessions are meant to test.
+  - Deck copy verbatim throughout, including the four answers and their
+    examples, every parameter explainer, and the discard sheet.
+  - **Two things became sayable that were not.** `createChore` never passed
+    `fixed_month_days` or `needed_by_time`, both of which the request already
+    had — so "rent on the 1st" could not be expressed at all. The flow offers
+    Day of week / Day of month and an optional needed-by time.
+  - The X always asks, even with nothing typed. A conditional prompt is a trap
+    that springs on exactly the occasion it matters.
+  - Rotation reorder is offered as up/down controls beside the drag affordance.
+    The deck shows a drag handle; the buttons do the same job for screen-reader
+    and switch users, and are the only version a test harness can drive.
+  - **One bug found only by driving it:** the default rotation (everyone, you
+    first) was computed at render time and never written into the draft, so
+    *Add chore* failed with "pick at least one person to take a turn" against a
+    visible list of three names. Defaults are now applied to the draft on the
+    way into screen 2, so the screen and the model agree.
+  Device-verified end to end, all four types: interval (`interval_days: 14`),
+  fixed-date by month day (`fixed_month_days: [1]`, 201), as-needed, and a
+  one-off routed to `POST /tasks` with its assignee and date. Next stays
+  disabled until a name and an answer exist; Back preserves both screens (the
+  14-day choice survived a round trip); X shows the discard sheet on both
+  screens and Keep editing returns to the form. The new row lands highlighted
+  with a "{Chore} added." snackbar.
+
 - **The board is the screen — DONE** (2026-09-02, UI cleanup phase 3), in four
   commits:
   - **Calendar tab deleted.** It read `state.tasks` only, so it showed the

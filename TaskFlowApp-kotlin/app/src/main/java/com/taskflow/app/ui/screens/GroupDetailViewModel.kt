@@ -226,7 +226,7 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
         dueDate: String? = null,
         onResult: (String?) -> Unit = {},
     ) {
-        runAction(successMessage = "Task added", onResult = onResult) {
+        runAction(successMessage = "${title.trim()} added.", onResult = onResult) {
             api.createTask(
                 groupId,
                 CreateTaskRequest(
@@ -389,9 +389,14 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
         intervalDays: Int?,
         fixedWeekdays: List<Int>?,
         rotation: List<String>,
+        // Both of these were already in the request and neither had a way in
+        // from the UI: the old form offered no needed-by time and no
+        // day-of-month schedule, so "rent on the 1st" could not be said at all.
+        fixedMonthDays: List<Int>? = null,
+        neededByTime: String? = null,
         onResult: (String?) -> Unit = {},
     ) {
-        runAction(successMessage = "Chore added", onResult = onResult) {
+        runAction(successMessage = "${name.trim()} added.", onResult = onResult) {
             api.createChore(
                 groupId,
                 CreateChoreRequest(
@@ -400,6 +405,8 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
                     scheduleType = scheduleType,
                     intervalDays = intervalDays,
                     fixedWeekdays = fixedWeekdays,
+                    fixedMonthDays = fixedMonthDays,
+                    neededByTime = neededByTime,
                     rotation = rotation,
                 ),
             )
