@@ -37,6 +37,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import android.Manifest
 import android.content.pm.PackageManager
@@ -78,7 +79,13 @@ import java.util.Locale
 /** How often the activity feed is polled while this screen is on screen. */
 private const val ACTIVITY_POLL_MILLIS = 5_000L
 
-private val TASK_STATUSES = listOf("todo", "in_progress", "done")
+// open / done, and nothing else — the v2 status language.
+//
+// "todo" stays as the wire value because that is what the tasks table holds and
+// what every existing row already says; only the word shown changed. Legacy
+// rows still carrying "in_progress" read as open (isOpen is status != "done"),
+// so nothing needs migrating and no history is rewritten.
+private val TASK_STATUSES = listOf("todo", "done")
 
 /**
  * Group detail: tasks, activity feed, members and invites for one group.
@@ -372,6 +379,7 @@ fun GroupDetailScreen(
                             // one-off shape still carried alongside them.
                             rows = state.occurrences.map { BoardRow.OccurrenceRow(it) } +
                                 state.tasks.map { BoardRow.TaskRow(it) },
+                            chores = state.chores,
                             members = state.members,
                             myUserId = myUserId,
                             onOpenDetail = { row ->
@@ -829,6 +837,7 @@ private fun AwayBanner(onBack: () -> Unit) {
 @Composable
 private fun TaskList(
     rows: List<BoardRow>,
+    chores: List<Chore>,
     members: List<MemberInfo>,
     myUserId: String?,
     onOpenDetail: (BoardRow) -> Unit,
@@ -852,9 +861,9 @@ private fun TaskList(
     val sections = remember(rows, myUserId) {
         val open = rows.filter { it.isOpen }
         listOf(
-            "Yours" to open.filter { it.assignedTo != null && it.assignedTo == myUserId },
-            "Others" to open.filter { it.assignedTo == null || it.assignedTo != myUserId },
-            "Done" to rows.filterNot { it.isOpen },
+            "YOURS" to open.filter { it.assignedTo != null && it.assignedTo == myUserId },
+            "OTHERS" to open.filter { it.assignedTo == null || it.assignedTo != myUserId },
+            "DONE THIS CYCLE" to rows.filterNot { it.isOpen },
         ).filter { it.second.isNotEmpty() }
     }
 
@@ -871,15 +880,17 @@ private fun TaskList(
         sections.forEach { (label, rows) ->
             item(key = "header-$label") {
                 Text(
-                    text = "$label · ${rows.size}",
+                    text = label,
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    letterSpacing = 0.8.sp,
                     modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
                 )
             }
             items(rows, key = { it.key }) { row ->
                 TaskCard(
                     row = row,
+                    scheduleText = scheduleLineFor(row, chores),
                     assigneeName = members.firstOrNull { it.id == row.assignedTo }?.username,
                     doneByName = members.firstOrNull { it.id == row.doneBy }?.username,
                     myUserId = myUserId,
@@ -898,6 +909,72 @@ private fun TaskList(
 private val UNDO_WINDOW: Duration = Duration.ofMinutes(10)
 
 /**
+ * Line 2 of a row: how often this comes round, in the household's words.
+ *
+ * "every 4 days", "Tuesdays", "as needed" - the same forms the chore's own
+ * schedule wording produces, so the row and the sheet cannot drift apart. A
+ * needed-by time rides along, because it is what the second reminder is
+ * measured against.
+ *
+ * A one-off has no frequency to state, so it says what it is and when:
+ * "one-off, Fri 11 Sep", or just "one-off" when it has no date. Returns null
+ * only while an occurrence's chore has yet to arrive, which is a moment rather
+ * than a state.
+ */
+private fun scheduleLineFor(row: BoardRow, chores: List<Chore>): String? = when (row) {
+    is BoardRow.OccurrenceRow ->
+        chores.firstOrNull { it.id == row.occurrence.choreId }?.let { chore ->
+            buildString {
+                append(chore.scheduleWording())
+                chore.neededByWording()?.let { append(" · $it") }
+            }
+        }
+
+    is BoardRow.TaskRow -> buildString {
+        append("one-off")
+        row.dueDate?.let { append(" · ${formatDueDate(it)}") }
+    }
+}
+
+/**
+ * Line 3 of a row: whose turn this is, and when it is wanted.
+ *
+ * Your own rows do not repeat your name back at you - "Due 30 Aug" rather than
+ * "you, due 30 Aug". A row with no date says whose turn it is instead of
+ * leaving the line empty, which is exactly what an as-needed chore needs: it is
+ * somebody's turn indefinitely, and that is the whole of its status.
+ *
+ * [dateAlreadyShown] suppresses the date when the schedule line above has
+ * already given it, which is the one-off case.
+ */
+private fun cycleLineFor(
+    row: BoardRow,
+    assigneeName: String?,
+    doneByName: String?,
+    myUserId: String?,
+    dateAlreadyShown: Boolean,
+): String {
+    if (!row.isOpen) {
+        val doer = doneByName ?: "someone"
+        val doneOn = row.doneAt?.let { formatDueDate(it) }
+        return if (doneOn != null) "Done by $doer · $doneOn" else "Done by $doer"
+    }
+
+    val due = row.dueDate?.takeUnless { dateAlreadyShown }?.let { formatDueDate(it) }
+    val mine = row.assignedTo != null && row.assignedTo == myUserId
+    val who = assigneeName ?: "Unassigned"
+    return when {
+        mine && due != null -> "Due $due"
+        mine -> "Your turn"
+        due != null -> "$who · due $due"
+        // Somebody else's standing turn. Possessive rather than "Maya - turn",
+        // which reads as a label instead of a sentence.
+        assigneeName != null -> "$who's turn"
+        else -> who
+    }
+}
+
+/**
  * One row on the board.
  *
  * The checkbox marks done in a single tap, per F1 — and **anyone** may tick
@@ -912,6 +989,7 @@ private val UNDO_WINDOW: Duration = Duration.ofMinutes(10)
 @Composable
 private fun TaskCard(
     row: BoardRow,
+    scheduleText: String?,
     assigneeName: String?,
     doneByName: String?,
     myUserId: String?,
@@ -952,6 +1030,13 @@ private fun TaskCard(
 
     val canUndo = mineToUndo && windowOpen
 
+    // A one-off's date *is* its schedule, so it is stated once, on the schedule
+    // line, and the cycle line below carries only the name. Everything else puts
+    // its date on the cycle line, where it belongs to this turn rather than to
+    // the arrangement.
+    val dateIsOnScheduleLine = row is BoardRow.TaskRow && row.dueDate != null
+    val cycleText = cycleLineFor(row, assigneeName, doneByName, myUserId, dateIsOnScheduleLine)
+
     ElevatedCard(
         modifier = Modifier
             .fillMaxWidth()
@@ -985,12 +1070,47 @@ private fun TaskCard(
                     color = if (row.isOpen) MaterialTheme.colorScheme.onSurface
                     else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Spacer(Modifier.height(4.dp))
+                // Line 2 - the agreement: how often this comes round. It is on
+                // the row rather than only in the sheet because the frequency is
+                // half of what the household agreed, and an agreement nobody can
+                // see is not doing its job (F4).
+                scheduleText?.let {
+                    Spacer(Modifier.height(2.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        // The amber follows the date. On a one-off the date is
+                        // up here, and hard-wiring the dot to the line below
+                        // left an overdue one-off with no signal at all.
+                        if (overdue && dateIsOnScheduleLine) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .clip(CircleShape)
+                                    .background(overdueColor()),
+                            )
+                        }
+                        Text(
+                            text = it,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (overdue && dateIsOnScheduleLine) overdueColor()
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+
+                // Line 3 - this cycle: whose turn it is, and when it is wanted.
+                Spacer(Modifier.height(3.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    if (overdue) {
+                    // The amber dot sits with whichever line carries the date,
+                    // and for everything except a one-off that is this one.
+                    if (overdue && !dateIsOnScheduleLine) {
                         Box(
                             modifier = Modifier
                                 .size(6.dp)
@@ -998,25 +1118,14 @@ private fun TaskCard(
                                 .background(overdueColor()),
                         )
                     }
-                    row.dueDate?.let {
-                        Text(
-                            text = formatDueDate(it),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (overdue) overdueColor()
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    val who = if (row.isOpen) assigneeName else doneByName
-                    who?.let {
-                        Text(
-                            text = if (row.isOpen) it else "done by $it",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    if (row is BoardRow.TaskRow && row.task.status == "in_progress") {
-                        StatusChip(row.task.status)
-                    }
+                    Text(
+                        text = cycleText,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (overdue && !dateIsOnScheduleLine) overdueColor()
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
 
@@ -1399,28 +1508,15 @@ private val AmberOnDark = androidx.compose.ui.graphics.Color(0xFFE3B341)
 private fun overdueColor(): androidx.compose.ui.graphics.Color =
     if (androidx.compose.foundation.isSystemInDarkTheme()) AmberOnDark else AmberOnLight
 
-@Composable
-private fun StatusChip(status: String) {
-    val color = when (status) {
-        "done" -> MaterialTheme.colorScheme.tertiary
-        "in_progress" -> MaterialTheme.colorScheme.secondary
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
-    }
-    Surface(
-        color = color.copy(alpha = .15f),
-        shape = MaterialTheme.shapes.small,
-    ) {
-        Text(
-            text = statusLabel(status),
-            style = MaterialTheme.typography.labelSmall,
-            color = color,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-        )
-    }
-}
+// StatusChip lived here. It rendered a task's status as a coloured pill on the
+// board row, which is the "status pill" v2 does away with: a row is open or it
+// is done, and the checkbox already says which.
 
 private fun statusLabel(status: String) = when (status) {
-    "todo" -> "To do"
+    "todo" -> "Open"
+    // Kept for the activity feed only. A row written before v2 can carry this,
+    // and the feed is a record of what happened rather than of what the app
+    // would say today.
     "in_progress" -> "In progress"
     "done" -> "Done"
     else -> status

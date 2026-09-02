@@ -93,6 +93,33 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
   intact and "Network error: Failed to connect to /10.0.2.2:8080" in its own
   error slot (B-7 not regressed), and pressing Create again once the server was
   back submitted the same form successfully.
+- **v2 UI phase 1 (board grammar) — DONE** (2026-09-02). Implements section 1
+  of the `Chore UI v2` deck.
+  - **Status language is open / done, nothing else.** The `in_progress` pill is
+    gone from the row, `StatusChip` deleted with it (it had no other caller),
+    and the task detail sheet offers **Open / Done** rather than three states.
+    `"todo"` stays as the wire value — only the word changed — so nothing needs
+    migrating and legacy `in_progress` rows still read as open. `statusLabel`
+    keeps its `in_progress` case for the activity feed, which is a record of
+    what happened rather than of what the app would say today.
+  - **The row is three lines now**, per the deck: name, then how often it comes
+    round ("every 4 days", "Thursdays", "as needed"), then whose turn it is and
+    when it is wanted ("Due Sun 6 Sep", "Your turn", "maya · due Sun 6 Sep",
+    "Done by maya · Wed 26 Aug"). Putting the frequency on the row is F4's
+    point: half an agreement on screen is not the treaty.
+  - A one-off states its date on the schedule line ("one-off · Sat 29 Aug"),
+    because a one-off's date *is* its schedule, and the cycle line below then
+    carries only the name. **The amber overdue treatment follows the date**
+    onto whichever line holds it — the first cut hard-wired it to the cycle
+    line and an overdue one-off lost its amber entirely.
+  - Section headers take the deck's wording: **YOURS / OTHERS / DONE THIS
+    CYCLE**, and the per-section count comes off the header.
+  - The done-line stays in the sheet only. The deck does not put it on the row
+    and the prompt says sheet if in doubt.
+  Device-verified at a true 360dp (density 480 on a 1080px screen) with a
+  46-character chore name, an as-needed row, an overdue one-off and a done row:
+  nothing truncates, the long name wraps to two lines, and nothing is red.
+
 - **The board is the screen — DONE** (2026-09-02, UI cleanup phase 3), in four
   commits:
   - **Calendar tab deleted.** It read `state.tasks` only, so it showed the
