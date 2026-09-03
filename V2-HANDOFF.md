@@ -258,20 +258,38 @@ happens when the board is read.
 3. ~~**Close the SSH rule again**~~ — done. It was open for the 1–2 September
    deploys and stopped answering on the afternoon of the 2nd.
 
-   **Update 2026-09-03: the box is not answering at all.** Port 22 *and* port
-   8080 both time out with no response, which is a stopped instance rather than
-   a closed security-group rule — a blocked port on a running instance behaves
-   the same way from outside, but 8080 was serving the client the day before
-   and nothing was changed in between. Starting it again is Babak's step; do
-   not go looking for console access.
+   ~~**Update 2026-09-03: the box is not answering at all** ... a stopped
+   instance rather than a closed security-group rule.~~ **That was wrong, and
+   it is worth knowing why, because the same trap is still there.**
 
-   **When it comes back, check the public IP before anything else.** A stopped
-   EC2 instance without an Elastic IP gets a new one on start, and that address
-   is baked into `taskflow.baseUrl` and inlined by the compiler into
-   `BuildConfig.BASE_URL` — so a new IP means editing `local.properties` **and**
-   a `clean`, and verifying the URL in Logcat's `okhttp` lines rather than in
-   the generated source. Section 6 has the rule; this is the case that triggers
-   it.
+   **The box was up the whole time.** Corrected 2026-09-04. Ports 22 and 8080
+   both time out from a dev machine *by design*:
+
+   - **8080 is not public and should not be.** Caddy terminates TLS on 443 and
+     proxies to the app, so the API lives at
+     `https://task-flow-babak.duckdns.org`, not at `:8080`. `deploy/Caddyfile`
+     has always said so.
+   - **22 is open only to specific `/32` addresses.** Two of them, one for
+     admin and one for whoever is deploying.
+
+   So "22 and 8080 both time out" is exactly what a healthy box looks like from
+   an address that is not on the SSH allow-list. **Do not read it as a dead
+   instance.** The check that settles it in one line, and which the earlier
+   note should have run:
+
+       curl -s -o /dev/null -w '%s
+' https://task-flow-babak.duckdns.org/health
+
+   A `401` there means the app is alive and refusing an unauthenticated
+   caller — which is the most an unauthenticated probe can prove, since the
+   auth middleware wraps every route including `/health` and unknown paths.
+
+   **The IP has not changed** and the DuckDNS name resolves to it. The warning
+   below still applies if the instance is ever stopped and started without an
+   Elastic IP, which is the case that would move it: a new address means
+   editing `local.properties` **and** a `clean`, because `BASE_URL` is a
+   `buildConfigField` the compiler inlines, and verifying the URL in Logcat's
+   `okhttp` lines rather than in the generated source.
 
    **One consequence:** the live server is now three commits behind. B-15's
    history `ORDER BY` tiebreaker, the `schedule_type` and re-dating work in
