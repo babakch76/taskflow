@@ -35,7 +35,13 @@ const choreColumns = `id, group_id, name, done_line, schedule_type, interval_day
 // returns rows that are renderable as they stand.
 const occurrenceColumns = `o.id, o.chore_id, o.group_id, o.assigned_to, o.status,
 	o.due_date, o.done_by, o.done_at, o.created_at, o.spawned_from, o.resume_after,
-	o.passed_from, o.passed_at, c.name, c.done_line`
+	o.passed_from, o.passed_at, o.covered_by, cov.username, c.name, c.done_line`
+
+// occurrenceJoins go with occurrenceColumns. The coverer join is LEFT: almost
+// every occurrence has no coverer, and an INNER join would quietly drop every
+// row that was not handed back.
+const occurrenceJoins = `JOIN chores c ON c.id = o.chore_id
+	LEFT JOIN users cov ON cov.id = o.covered_by`
 
 // undoWindow is how long after marking an occurrence done it can still be taken
 // back, and only by the person who marked it. Anything older is history, and
@@ -549,7 +555,7 @@ func (h *ChoreHandler) ListOccurrences(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.DB.Query(`
 		SELECT `+occurrenceColumns+`
 		FROM occurrences o
-		JOIN chores c ON c.id = o.chore_id
+		`+occurrenceJoins+`
 		WHERE o.group_id = ?
 		ORDER BY
 			CASE o.status WHEN 'open' THEN 0 ELSE 1 END,
@@ -923,6 +929,23 @@ func spawnNext(
 
 	assignee, resumeAfter := nextTurn(chore.Rotation, completed, doerID, away)
 
+	// Who covered, if this is a hand-back rather than a normal advance.
+	//
+	// The test is nextTurn's own, deliberately spelled the same way: the turn
+	// was *owed* by someone, and somebody else did it. A busy pass moves who
+	// owes it, which is why passed_from is consulted here too — an earlier
+	// version compared against assigned_to alone and so recorded nothing for a
+	// pass, the very case the marker exists for.
+	owedBy := completed.AssignedTo
+	if completed.PassedFrom != nil {
+		owedBy = *completed.PassedFrom
+	}
+	var coveredBy *string
+	if doerID != owedBy {
+		doer := doerID
+		coveredBy = &doer
+	}
+
 	next := models.Occurrence{
 		ID:          uuid.New().String(),
 		ChoreID:     chore.ID,
@@ -932,6 +955,7 @@ func spawnNext(
 		DueDate:     nextDueDate(chore, completed, completedAt),
 		SpawnedFrom: &completed.ID,
 		ResumeAfter: resumeAfter,
+		CoveredBy:   coveredBy,
 	}
 	return insertOccurrence(tx, next)
 }
@@ -1200,7 +1224,7 @@ func scanOccurrence(s scanner, o *models.Occurrence) error {
 	return s.Scan(
 		&o.ID, &o.ChoreID, &o.GroupID, &o.AssignedTo, &o.Status,
 		&o.DueDate, &o.DoneBy, &o.DoneAt, &o.CreatedAt, &o.SpawnedFrom, &o.ResumeAfter,
-		&o.PassedFrom, &o.PassedAt, &o.ChoreName, &o.DoneLine,
+		&o.PassedFrom, &o.PassedAt, &o.CoveredBy, &o.CoveredByName, &o.ChoreName, &o.DoneLine,
 	)
 }
 
@@ -1222,7 +1246,7 @@ func (h *ChoreHandler) loadChore(choreID string) (*models.Chore, error) {
 func (h *ChoreHandler) loadOccurrence(occurrenceID string) (*models.Occurrence, error) {
 	var o models.Occurrence
 	err := scanOccurrence(h.DB.QueryRow(
-		`SELECT `+occurrenceColumns+` FROM occurrences o JOIN chores c ON c.id = o.chore_id WHERE o.id = ?`,
+		`SELECT `+occurrenceColumns+` FROM occurrences o `+occurrenceJoins+` WHERE o.id = ?`,
 		occurrenceID,
 	), &o)
 	if err != nil {
@@ -1309,9 +1333,10 @@ func replaceRotation(tx *sql.Tx, choreID string, rotation []string) error {
 func insertOccurrence(tx *sql.Tx, o models.Occurrence) error {
 	_, err := tx.Exec(
 		`INSERT INTO occurrences (id, chore_id, group_id, assigned_to, status, due_date,
-			spawned_from, resume_after, created_at)
-		 VALUES (?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`,
-		o.ID, o.ChoreID, o.GroupID, o.AssignedTo, o.Status, o.DueDate, o.SpawnedFrom, o.ResumeAfter,
+			spawned_from, resume_after, covered_by, created_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`,
+		o.ID, o.ChoreID, o.GroupID, o.AssignedTo, o.Status, o.DueDate, o.SpawnedFrom,
+		o.ResumeAfter, o.CoveredBy,
 	)
 	return err
 }

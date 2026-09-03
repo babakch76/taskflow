@@ -8,6 +8,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -119,6 +120,10 @@ fun GroupDetailScreen(
     // board for a moment. Cleared on a timer: a highlight that stays is just a
     // second kind of status.
     var justAdded by remember { mutableStateOf<String?>(null) }
+    // The occurrence a busy pass is being confirmed for. Both the swipe and the
+    // detail sheet route through here, so the rule is stated once and the two
+    // paths cannot drift apart.
+    var passCandidate by remember { mutableStateOf<Occurrence?>(null) }
     var showAway by remember { mutableStateOf(false) }
     // Which history is open. The chore name is held alongside so the sheet has
     // a title before its data arrives.
@@ -168,6 +173,11 @@ fun GroupDetailScreen(
     }
 
     val iAmAway = state.members.firstOrNull { it.id == myUserId }?.away == true
+
+    // Shown once, under the first row you can actually swipe, and never again
+    // on this device. Whether somebody has found a gesture is not household
+    // data, so it stays local.
+    var showSwipeHint by remember { mutableStateOf(!LocalHints.swipeHintDismissed(context)) }
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -396,6 +406,7 @@ fun GroupDetailScreen(
                             justAdded = justAdded,
                             members = state.members,
                             myUserId = myUserId,
+                            showSwipeHint = showSwipeHint,
                             onOpenDetail = { row ->
                                 when (row) {
                                     is BoardRow.TaskRow -> detailTaskId = row.task.id
@@ -411,6 +422,17 @@ fun GroupDetailScreen(
                                     )
                                     is BoardRow.OccurrenceRow ->
                                         viewModel.toggleOccurrenceDone(row.occurrence)
+                                }
+                            },
+                            onPass = { row ->
+                                (row as? BoardRow.OccurrenceRow)?.let {
+                                    passCandidate = it.occurrence
+                                }
+                            },
+                            onSwiped = {
+                                if (showSwipeHint) {
+                                    showSwipeHint = false
+                                    LocalHints.dismissSwipeHint(context)
                                 }
                             },
                             onCreate = { showCreate = true },
@@ -461,7 +483,7 @@ fun GroupDetailScreen(
             onDismiss = { detailOccurrenceId = null },
             onPass = {
                 detailOccurrenceId = null
-                viewModel.passOccurrence(occurrence)
+                passCandidate = occurrence
             },
             onEditChore = {
                 // Close the sheet first: an AlertDialog over a bottom sheet
@@ -562,6 +584,46 @@ fun GroupDetailScreen(
     LaunchedEffect(detailOccurrenceId, state.occurrences) {
         if (detailOccurrenceId != null && state.occurrences.none { it.id == detailOccurrenceId }) {
             detailOccurrenceId = null
+        }
+    }
+
+    // The busy pass, confirmed.
+    //
+    // The debt rule is stated twice by design: here, in plain language, at the
+    // moment of passing; and afterwards as a standing marker on the row that
+    // comes back. Once is not enough for a rule this counter-intuitive — the
+    // chore leaves your row and returns a cycle later, which looks like a bug
+    // unless somebody said so.
+    passCandidate?.let { occurrence ->
+        val chore = state.chores.firstOrNull { it.id == occurrence.choreId }
+        val receiver = nextInRotationAfter(chore, occurrence, state.members)
+        if (receiver == null) {
+            // Nobody to pass to. Nothing to confirm, so say why rather than
+            // showing a dialog with an empty name in it.
+            passCandidate = null
+        } else {
+            AlertDialog(
+                onDismissRequest = { passCandidate = null },
+                title = { Text("Pass ${occurrence.choreName} to ${receiver.username}?") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            "Next time it's yours again. ${receiver.username}'s cover " +
+                                "counts as ${receiver.username}'s turn.",
+                        )
+                        Text(passNoticeLine(occurrence, chore, receiver.username))
+                    }
+                },
+                confirmButton = {
+                    Button(onClick = {
+                        passCandidate = null
+                        viewModel.passOccurrence(occurrence, receiver.username)
+                    }) { Text("Pass it to ${receiver.username}") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { passCandidate = null }) { Text("Keep it") }
+                },
+            )
         }
     }
 
@@ -901,8 +963,11 @@ private fun TaskList(
     justAdded: String?,
     members: List<MemberInfo>,
     myUserId: String?,
+    showSwipeHint: Boolean,
     onOpenDetail: (BoardRow) -> Unit,
     onToggleDone: (BoardRow) -> Unit,
+    onPass: (BoardRow) -> Unit,
+    onSwiped: () -> Unit,
     onCreate: () -> Unit,
 ) {
     if (rows.isEmpty()) {
@@ -948,17 +1013,44 @@ private fun TaskList(
                     modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
                 )
             }
-            items(rows, key = { it.key }) { row ->
+            itemsIndexed(rows, key = { _, row -> row.key }) { index, row ->
                 TaskCard(
                     row = row,
                     scheduleText = scheduleLineFor(row, chores),
                     highlighted = justAdded != null && row.title.equals(justAdded, ignoreCase = true),
                     assigneeName = members.firstOrNull { it.id == row.assignedTo }?.username,
                     doneByName = members.firstOrNull { it.id == row.doneBy }?.username,
+                    coveredByName = (row as? BoardRow.OccurrenceRow)?.occurrence?.coveredByName,
+                    // Whether there is anybody to pass to at all. A rotation of
+                    // one, or a household where everyone else is away, has
+                    // nowhere to send it, and offering the gesture there would
+                    // promise a hand-off that came straight back.
+                    canPass = (row as? BoardRow.OccurrenceRow)?.let { occRow ->
+                        nextInRotationAfter(
+                            chores.firstOrNull { it.id == occRow.occurrence.choreId },
+                            occRow.occurrence,
+                            members,
+                        ) != null
+                    } == true,
+                    passedByMe = (row as? BoardRow.OccurrenceRow)
+                        ?.occurrence?.passedFrom == myUserId && myUserId != null,
                     myUserId = myUserId,
                     onOpenDetail = { onOpenDetail(row) },
                     onToggleDone = { onToggleDone(row) },
+                    onPass = { onPass(row) },
+                    onSwiped = onSwiped,
                 )
+                // The hint sits under the first row of the first section, which
+                // is a row you can actually swipe. Under a heading it would be
+                // advice about nothing in particular.
+                if (showSwipeHint && label == "YOURS" && index == 0) {
+                    Text(
+                        text = "Swipe a row for actions.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 4.dp, top = 2.dp),
+                    )
+                }
             }
         }
     }
@@ -1055,9 +1147,14 @@ private fun TaskCard(
     highlighted: Boolean,
     assigneeName: String?,
     doneByName: String?,
+    coveredByName: String?,
+    passedByMe: Boolean,
+    canPass: Boolean,
     myUserId: String?,
     onOpenDetail: () -> Unit,
     onToggleDone: () -> Unit,
+    onPass: () -> Unit,
+    onSwiped: () -> Unit,
 ) {
     val overdue = isOverdue(row)
 
@@ -1100,6 +1197,32 @@ private fun TaskCard(
     val dateIsOnScheduleLine = row is BoardRow.TaskRow && row.dueDate != null
     val cycleText = cycleLineFor(row, assigneeName, doneByName, myUserId, dateIsOnScheduleLine)
 
+    // Swipe is offered on your own open chore rows and nowhere else.
+    //
+    // Not on somebody else's row: the two actions behind it are "I did this"
+    // and "I can't do this", and neither is yours to say about their turn. Not
+    // on a one-off either, which has no rotation to pass along. The detail
+    // sheet keeps its own button, so the gesture is a shortcut rather than the
+    // only way through — some people will never find it, and that is a finding
+    // rather than a dead end.
+    val swipeable = row is BoardRow.OccurrenceRow && row.isOpen &&
+        myUserId != null && row.assignedTo == myUserId && canPass
+
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            when (value) {
+                SwipeToDismissBoxValue.EndToStart -> onPass()
+                SwipeToDismissBoxValue.StartToEnd -> onToggleDone()
+                SwipeToDismissBoxValue.Settled -> Unit
+            }
+            if (value != SwipeToDismissBoxValue.Settled) onSwiped()
+            // Never actually dismiss: the row is revealing an action, not
+            // leaving the board, so it snaps back once the action has fired.
+            false
+        },
+    )
+
+    val card: @Composable () -> Unit = {
     ElevatedCard(
         modifier = Modifier
             .fillMaxWidth()
@@ -1191,6 +1314,27 @@ private fun TaskCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+
+                // The debt rule, said out loud on the two rows it applies to.
+                //
+                // Without this a pass looks like the chore simply left, and the
+                // return looks like a turn that never moved. Both are the rule
+                // working; neither is legible without a sentence.
+                val marker = when {
+                    passedByMe -> "Next turn comes back to you. " +
+                        "${assigneeName ?: "Someone"} is covering this one"
+                    coveredByName != null && row.isOpen -> "Back to you after $coveredByName covered"
+                    else -> null
+                }
+                marker?.let {
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 2,
+                    )
+                }
             }
 
             // Affordance that the row leads somewhere.
@@ -1201,6 +1345,42 @@ private fun TaskCard(
             )
         }
     }
+    }
+
+    if (!swipeable) {
+        card()
+        return
+    }
+
+    SwipeToDismissBox(
+        state = dismissState,
+        backgroundContent = {
+            val toEnd = dismissState.dismissDirection == SwipeToDismissBoxValue.StartToEnd
+            Surface(
+                shape = MaterialTheme.shapes.medium,
+                color = if (toEnd) MaterialTheme.colorScheme.tertiaryContainer
+                else MaterialTheme.colorScheme.secondaryContainer,
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 20.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = if (toEnd) Arrangement.Start else Arrangement.End,
+                ) {
+                    Text(
+                        text = if (toEnd) "Done" else "Pass it",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = if (toEnd) MaterialTheme.colorScheme.onTertiaryContainer
+                        else MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                }
+            }
+        },
+        content = { card() },
+    )
 }
 
 /**

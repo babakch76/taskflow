@@ -364,6 +364,12 @@ func addMissingColumns(db *sql.DB) error {
 		{table: "group_members", name: "away_until", ddl: `ALTER TABLE group_members ADD COLUMN away_until DATETIME`},
 		{table: "occurrences", name: "passed_from", ddl: `ALTER TABLE occurrences ADD COLUMN passed_from TEXT REFERENCES users(id)`},
 		{table: "occurrences", name: "passed_at", ddl: `ALTER TABLE occurrences ADD COLUMN passed_at DATETIME`},
+		// Who covered the turn this occurrence is handing back.
+		//
+		// Set only when the debt rule returns a chore to the person who owed it,
+		// which is the one moment the board has something to explain: the row
+		// came back to you because somebody else did the last one.
+		{table: "occurrences", name: "covered_by", ddl: `ALTER TABLE occurrences ADD COLUMN covered_by TEXT REFERENCES users(id)`},
 		{table: "users", name: "quiet_from", ddl: `ALTER TABLE users ADD COLUMN quiet_from TEXT NOT NULL DEFAULT '21:00'`},
 		{table: "users", name: "quiet_to", ddl: `ALTER TABLE users ADD COLUMN quiet_to TEXT NOT NULL DEFAULT '09:00'`},
 	}

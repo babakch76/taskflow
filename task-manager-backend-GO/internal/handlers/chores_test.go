@@ -619,6 +619,92 @@ func TestFixedDateDoneLateLandsOnAFutureSlot(t *testing.T) {
 	}
 }
 
+// covered_by is written when the debt rule hands a turn back, and only then.
+//
+// It is what lets the returned row say "back to you after Maya covered" rather
+// than showing a turn that appears not to have moved at all.
+func TestCoveredByIsSetOnADebtReturnAndNotOnANormalAdvance(t *testing.T) {
+	db := newTestDB(t)
+	ann := newUser(t, db, "ann")
+	bo := newUser(t, db, "bo")
+	groupID := newGroup(t, db, ann, "Flat")
+	addMember(t, db, groupID, bo, "member")
+
+	chore := createChore(t, db, groupID, ann, fmt.Sprintf(`{
+		"name": "Kitchen", "schedule_type": "as_needed", "rotation": [%q, %q]
+	}`, ann, bo))
+
+	// ann's turn, done by bo: a cover, so the next one comes back to ann and
+	// should say who covered.
+	first := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	patchOccurrence(t, db, groupID, first.ID, bo, "done")
+
+	returned := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	if returned.AssignedTo != ann {
+		t.Fatalf("the debt did not come back to ann; it went to %s", returned.AssignedTo)
+	}
+	if returned.CoveredBy == nil || *returned.CoveredBy != bo {
+		t.Fatalf("covered_by = %v, want bo (%s)", returned.CoveredBy, bo)
+	}
+	if returned.CoveredByName == nil || *returned.CoveredByName != "bo" {
+		t.Errorf("covered_by_name = %v, want \"bo\"", returned.CoveredByName)
+	}
+
+	// ann now does her own turn. That is a normal advance, so nobody covered
+	// and the next occurrence must carry nothing.
+	patchOccurrence(t, db, groupID, returned.ID, ann, "done")
+
+	normal := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	if normal.CoveredBy != nil {
+		t.Errorf("covered_by = %v on a normal advance; want nil", *normal.CoveredBy)
+	}
+	if normal.CoveredByName != nil {
+		t.Errorf("covered_by_name = %v on a normal advance; want nil", *normal.CoveredByName)
+	}
+}
+
+// The same marker after a busy pass, which is the case it exists for: the
+// receiver did the work, and the turn goes back to whoever passed it.
+func TestCoveredByIsSetAfterABusyPass(t *testing.T) {
+	db := newTestDB(t)
+	ann := newUser(t, db, "ann")
+	bo := newUser(t, db, "bo")
+	groupID := newGroup(t, db, ann, "Flat")
+	addMember(t, db, groupID, bo, "member")
+
+	chore := createChore(t, db, groupID, ann, fmt.Sprintf(`{
+		"name": "Bins", "schedule_type": "as_needed", "rotation": [%q, %q]
+	}`, ann, bo))
+
+	mine := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+
+	h := &ChoreHandler{DB: db}
+	rec := httptest.NewRecorder()
+	h.PassOccurrence(rec, request("POST",
+		"/groups/"+groupID+"/occurrences/"+mine.ID+"/pass", "", ann,
+		map[string]string{"group_id": groupID, "occurrence_id": mine.ID}))
+	if rec.Code != 200 {
+		t.Fatalf("pass: got %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	passed := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	if passed.AssignedTo != bo {
+		t.Fatalf("the pass went to %s, want bo", passed.AssignedTo)
+	}
+
+	// bo does the chore he was passed. The turn owes back to ann, and the row
+	// that comes back should say bo covered it.
+	patchOccurrence(t, db, groupID, passed.ID, bo, "done")
+
+	returned := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	if returned.AssignedTo != ann {
+		t.Fatalf("the debt went to %s, want ann", returned.AssignedTo)
+	}
+	if returned.CoveredBy == nil || *returned.CoveredBy != bo {
+		t.Fatalf("covered_by = %v after a pass, want bo", returned.CoveredBy)
+	}
+}
+
 // ── What an edit does to the turn already on the board ──────────────────────
 //
 // The rules under test: the assignee never moves because of an edit, a changed

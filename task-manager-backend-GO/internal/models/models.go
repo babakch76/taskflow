@@ -181,6 +181,15 @@ type Occurrence struct {
 	// current holder's turn.
 	PassedAt *time.Time `json:"passed_at,omitempty"`
 
+	// CoveredBy is who did the previous cycle when this one came back under the
+	// debt rule, and CoveredByName is their display name, joined in.
+	//
+	// Null on a normal advance. It is the difference between "your turn" and
+	// "your turn again, because Maya did the last one for you" — the second of
+	// which the board should say rather than leave to be worked out.
+	CoveredBy     *string `json:"covered_by,omitempty"`
+	CoveredByName *string `json:"covered_by_name,omitempty"`
+
 	// ChoreName and DoneLine are joined in so the board can render a row
 	// without a second round trip per occurrence.
 	ChoreName string `json:"chore_name"`

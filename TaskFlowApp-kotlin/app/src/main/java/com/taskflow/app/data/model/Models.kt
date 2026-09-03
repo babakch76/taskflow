@@ -182,6 +182,18 @@ data class Occurrence(
     /** When it last changed hands — when it became the current holder's turn. */
     @SerializedName("passed_at")
     val passedAt: OffsetDateTime? = null,
+    /**
+     * Who did the previous cycle, when this one came back under the debt rule.
+     *
+     * Null on a normal advance. It is the difference between "your turn" and
+     * "your turn again, because somebody did the last one for you", and the
+     * board says the second one out loud rather than leaving it to be inferred
+     * from a turn that appears not to have moved.
+     */
+    @SerializedName("covered_by")
+    val coveredBy: String? = null,
+    @SerializedName("covered_by_name")
+    val coveredByName: String? = null,
     /** Joined in by the backend so a row renders without a second round trip. */
     @SerializedName("chore_name")
     val choreName: String = "",

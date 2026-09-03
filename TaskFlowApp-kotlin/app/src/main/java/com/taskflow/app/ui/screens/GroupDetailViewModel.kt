@@ -470,8 +470,11 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
      * expecting to have got rid of it should find that out from the app, not
      * from the board a week later.
      */
-    fun passOccurrence(occurrence: Occurrence) {
-        runAction(successMessage = "Passed on. It comes back to you next time") {
+    fun passOccurrence(occurrence: Occurrence, receiverName: String? = null) {
+        runAction(
+            successMessage = receiverName?.let { "Passed to $it. It's yours again next cycle." }
+                ?: "Passed on. It comes back to you next cycle.",
+        ) {
             api.passOccurrence(groupId, occurrence.id)
         }
     }

@@ -208,6 +208,44 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
   weekly → Fridays"; switching to as-needed cleared the date; X mid-edit
   discarded and left the name untouched; delete returned 204 and took the row.
 
+- **v2 UI phase 2 (busy pass by swipe) — DONE** (2026-09-03), with one gap
+  recorded below.
+  - **Swipe your own open chore row**: left passes it, right marks it done. Not
+    on somebody else's row (neither action is yours to take about their turn),
+    not on a one-off (no rotation to pass along), and not when there is nobody
+    to pass to — a rotation of one, or everyone else away. The detail sheet
+    keeps its own button, so the gesture is a shortcut rather than the only way.
+  - **A one-line hint** under the first row of YOURS, gone on the first swipe
+    and never shown again. Stored in plain SharedPreferences: whether somebody
+    has found a gesture is not household data and has no business on the server.
+  - **The confirmation states the debt rule in plain language**, with the right
+    date variant: "due tomorrow" only when the pass actually re-dates an
+    already-due chore, the real date when it is still ahead, and "it's their
+    turn" for an as-needed chore that has no date at all.
+  - **Backend, `covered_by` (+ tests).** An occurrence handed back under the
+    debt rule records who covered it, so the board can say
+    *"Back to you after maya covered"*. The passer's board meanwhile shows
+    *"Next turn comes back to you. maya is covering this one"*, from the
+    `passed_from` it already had. The migration added the column to a populated
+    database without disturbing it.
+  - **The bug worth remembering:** the first condition compared the new
+    assignee against `assigned_to` alone, which catches a voluntary cover and
+    misses a *pass* — the very case the marker exists for. The unit test I
+    wrote first covered only the cover case and passed. It now mirrors
+    `nextTurn`'s own `owedBy` calculation, and there is a second test for the
+    pass path.
+  - **Gap: no Undo on the pass snackbar.** The deck shows one and the prompt
+    asks for it, but undoing a pass means writing `assigned_to` back and
+    clearing `passed_from`, and no endpoint does that. The phase authorises one
+    backend change (`covered_by`), so the endpoint was not invented. The
+    snackbar reads "Passed to maya. It's yours again next cycle." with no
+    action. **Needs a decision**: add `DELETE /occurrences/{id}/pass`, or drop
+    Undo from the design.
+  Device-verified: hint shown then dismissed on first swipe; a one-person
+  rotation correctly does not swipe; confirmation named maya and used the
+  future-date variant; the pass created no group activity entry (constraint 7);
+  both markers appear on the right rows.
+
 - **The board is the screen — DONE** (2026-09-02, UI cleanup phase 3), in four
   commits:
   - **Calendar tab deleted.** It read `state.tasks` only, so it showed the
