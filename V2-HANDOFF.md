@@ -8,6 +8,20 @@ at the repo root.
 
 ---
 
+## 0. If you are picking this up
+
+- **What the app does:** [`FEATURES.md`](FEATURES.md), written against the built
+  app rather than the plan.
+- **What to build next:** [`PROPOSALS.md`](PROPOSALS.md), six changes Babak
+  raised on handing over, with what already exists and what has to be decided
+  first. **Two items there are defects rather than improvements** and are worth
+  reading before anything else: an owner cannot leave a household they created,
+  and a rotation edit silently voids a turn somebody owed.
+- **Why things are the way they are:** [`BACKLOG.md`](BACKLOG.md).
+- **What is deployed:** section 4 below.
+
+---
+
 ## 1. What this project is now
 
 TaskFlow was a generic task manager. The spec turns it into a **household chore
