@@ -320,6 +320,80 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
     except the screen the away person is actually looking at.
   - **The Board tab counts open rows** (B-11).
   Device-verified throughout; the details are in each commit message.
+- **The turn rule, verified case by case — DONE** (2026-09-03), against
+  `turn_rule_cases_prompt.md`. Thirteen cases now live in
+  `internal/handlers/turn_rule_test.go`, each asserting a whole *sequence* of
+  assignments rather than one step, because that sequence is the only part of
+  the engine a household can actually see.
+
+  **Four of the document's cases were wrong in code, and one of its own
+  premises was wrong.**
+
+  - **2.1, chained passes.** The document suspected that "B's pass overwrites
+    A's, so only B is charged". The storage did the **opposite**: `passed_from`
+    kept the *first* passer, so A was charged and B was never recorded at all.
+    Neither the suspicion nor the requirement. Reported before touching it, as
+    Part 5 asks.
+
+    Fixed by replacing the single pointer with `occurrences.passed_chain`, an
+    ordered list, and `occurrences.pending_debts`, the queue of turns still
+    owed. Each passer owes one and they are repaid oldest first. This
+    **reverses** the previous rule, which held that passing on "declines a
+    favour, not a duty"; that reasoning is recorded in the renamed
+    `TestAChainOfPassesRepaysTheFirstPasserFirst` so nobody restores it by
+    accident.
+
+  - **1.3, repeated skips.** Covering went `B, B, B`: the pass always targeted
+    the person immediately after the *skipper*, so one unlucky neighbour
+    absorbed every skip by a serial passer. It now counts on from the last
+    coverer, which gives the document's `B, C, B`.
+
+  - **1.5, a debt across an absence.** The turn was handed back to a member who
+    was away and simply sat on their empty row, which contradicts constraint 8
+    lifting an away member out of every rotation. The debt is now *held*: the
+    ordinary rotation carries on without them and the turn returns when they
+    do. `TestAwayDoesNotCancelADebtAlreadyOwed` asserted the old behaviour and
+    has been rewritten rather than deleted, with the reason.
+
+  - **2.2, an occurrence passed twice by the same person.** The document's
+    stated decision was to block it; Babak's call was to **allow** circulation.
+    Allowed, with one consequence handled: the chain records each person
+    **once**, in first-pass order. Part 0 forbids counting anyone's skips, so a
+    chain holding every pass event would be a skip counter in all but name, and
+    3.5 wants one debt per person anyway. A repeat pass is therefore permitted
+    but buys no second debt, and the chain stays bounded by the rotation.
+
+  **Part 3's unnamed cases** are covered by tests and fall out of the same
+  mechanism: a resume point that is not in the rotation falls back to the
+  position of whoever owed the turn (3.1, 3.2), and a debt is filtered out when
+  its owner leaves the rotation (3.3, 3.4). Undo needed no work (3.7) because
+  the debts live on the *completed* occurrence and completion does not consume
+  them; a test pins it.
+
+  **The client had a copy of the pass rule and it drifted.** `nextInRotationAfter`
+  in `PassChore.kt` predicts the receiver so the confirm dialog can name them
+  before the request is sent, and it still counted from the holder. With sam
+  brought back into the household the dialog said "maya" while the server would
+  have assigned sam. Both now count from `resume_after`, which meant exposing
+  that field to the client. **This is the second time the two have diverged**;
+  the durable fix is for the server to return the prospective receiver instead
+  of the client recomputing it, and that is worth doing before anything else
+  touches the pass.
+
+  Verified: 13 cases green, the whole backend suite green, `go vet` clean, the
+  two-column migration run against the populated local database with every row
+  count unchanged, a test for the read-time backfill of pre-chain rows (the
+  live data had none, so nothing else would have caught a mistake there), and
+  the pass driven on the device with the dialog and the board naming the same
+  person. The seeded household was restored to exactly its previous state
+  afterwards.
+
+  **Not on the wire, deliberately:** `passed_chain` and `pending_debts` are
+  `json:"-"`. Publishing who has passed what, or who owes turns, is what
+  constraint 7 exists to prevent, and a client that could read it could count
+  it. **Worth a separate look:** `passed_from` *is* already published to every
+  member, which is arguably the same leak and predates this work.
+
 - **Undo on the pass snackbar — DONE** (2026-09-03, Babak's call). The v2
   design showed an Undo on "Passed to maya. It's yours again next cycle." and
   there was none. `DELETE /groups/{id}/occurrences/{id}/pass` now exists.

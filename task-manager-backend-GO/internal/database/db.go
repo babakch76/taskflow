@@ -378,6 +378,33 @@ func addMissingColumns(db *sql.DB) error {
 		// passer: without this column, pass-then-undo would quietly turn a late
 		// chore into one due tomorrow.
 		{table: "occurrences", name: "due_before_pass", ddl: `ALTER TABLE occurrences ADD COLUMN due_before_pass DATETIME`},
+		// Everyone who has passed this occurrence, in the order they first did.
+		//
+		// Replaces the single passed_from pointer, which could only ever charge
+		// one skip: when A passed to B and B passed on to C, only A owed a turn
+		// and B's skip left no trace. Each passer now owes one.
+		//
+		// Each person appears **once**, even if they pass the same occurrence
+		// again after it has come round to them. Part 0 of the turn-rule document
+		// forbids counting anyone's skips, so a chain that recorded every pass
+		// event would be a skip counter in all but name; and one debt per person
+		// per chore is what 3.5 requires anyway. It also means the chain *is* the
+		// set of people who have passed, which is what tells us everyone in a
+		// rotation is busy.
+		//
+		// Comma-separated ids, following fixed_weekdays. No migration needed: a
+		// row written before this column existed carries passed_from, which the
+		// scanner reads as a one-element chain.
+		{table: "occurrences", name: "passed_chain", ddl: `ALTER TABLE occurrences ADD COLUMN passed_chain TEXT`},
+		// Turns owed on this chore that this occurrence is not itself repaying,
+		// carried forward in the order they were incurred.
+		//
+		// A chain of passes creates several debts at once and they are repaid one
+		// occurrence at a time, so the ones still waiting have to live somewhere.
+		// This is also where a debt waits out an absence: an away member keeps
+		// their place in the queue while the ordinary rotation carries on without
+		// them.
+		{table: "occurrences", name: "pending_debts", ddl: `ALTER TABLE occurrences ADD COLUMN pending_debts TEXT`},
 		{table: "users", name: "quiet_from", ddl: `ALTER TABLE users ADD COLUMN quiet_from TEXT NOT NULL DEFAULT '21:00'`},
 		{table: "users", name: "quiet_to", ddl: `ALTER TABLE users ADD COLUMN quiet_to TEXT NOT NULL DEFAULT '09:00'`},
 	}

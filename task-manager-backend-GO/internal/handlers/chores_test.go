@@ -1284,7 +1284,7 @@ func TestNextTurn(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			completed := &models.Occurrence{AssignedTo: tc.assignedTo, ResumeAfter: tc.resumeAfter}
-			gotAssignee, gotResume := nextTurn(rotation, completed, tc.doer, nil)
+			gotAssignee, gotResume, _, _ := nextTurn(rotation, completed, tc.doer, nil)
 
 			if gotAssignee != tc.wantAssignee {
 				t.Errorf("assignee: got %s, want %s", gotAssignee, tc.wantAssignee)
@@ -1427,9 +1427,17 @@ func TestPassingDefersTheTurnItDoesNotDeleteIt(t *testing.T) {
 	}
 }
 
-// Passing on declines a favour, not a duty: the second passer keeps their own
-// turn, and the debt stays with whoever it belonged to in the first place.
-func TestPassingOnwardLeavesTheDebtWithTheFirstPasser(t *testing.T) {
+// A chain of passes repays the *first* passer first, and passed_from still
+// names them.
+//
+// This used to be called "passing onward leaves the debt with the first
+// passer", on the reasoning that passing something on declines a favour rather
+// than a duty. Case 2.1 of the turn-rule document overrode that: B was holding
+// the chore when B passed it, so B skipped too and owes one back. Both debts
+// now exist. What has not changed, and is what this test pins, is the order —
+// A skipped first, so A is asked first. TestTurnRule_2_1 covers the rest of
+// the sequence.
+func TestAChainOfPassesRepaysTheFirstPasserFirst(t *testing.T) {
 	db := newTestDB(t)
 	ann := newUser(t, db, "ann")
 	bo := newUser(t, db, "bo")
@@ -1454,7 +1462,7 @@ func TestPassingOnwardLeavesTheDebtWithTheFirstPasser(t *testing.T) {
 		t.Errorf("passed_from moved to %v; it must stay with ann, whose turn it was", after.PassedFrom)
 	}
 
-	// cass does it: the debt returns to ann, not to bo.
+	// cass does it: the first debt returns to ann. bo's is queued behind it.
 	patchOccurrence(t, db, groupID, after.ID, cass, "done")
 	next := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
 	if next.AssignedTo != ann {
@@ -1725,10 +1733,16 @@ func TestANewChoreSkipsAnAwayFirstMember(t *testing.T) {
 	}
 }
 
-// Away is not a way to discharge a debt. A cover hands the turn back to whoever
-// owed it, whether or not they are away; it waits on their row, which is what
-// an open occurrence does anyway.
-func TestAwayDoesNotCancelADebtAlreadyOwed(t *testing.T) {
+// Away is not a way to discharge a debt, and it is not a reason to park a live
+// chore on an empty room's row either. The debt is *held*: the rotation carries
+// on without the person who owes it, and the turn comes back to them when they
+// do.
+//
+// This test used to assert the opposite — that the turn was handed straight
+// back to the away member and simply waited there. That contradicted constraint
+// 8, which lifts an away member out of every rotation, and case 1.5 of the
+// turn-rule document settled it the other way.
+func TestAwayHoldsADebtRatherThanParkingIt(t *testing.T) {
 	db := newTestDB(t)
 	ann := newUser(t, db, "ann")
 	bo := newUser(t, db, "bo")
@@ -1745,8 +1759,19 @@ func TestAwayDoesNotCancelADebtAlreadyOwed(t *testing.T) {
 	patchOccurrence(t, db, groupID, occ.ID, bo, "done")
 
 	next := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
-	if next.AssignedTo != ann {
-		t.Errorf("the debt went to %s; going away does not discharge a turn you already owed", next.AssignedTo)
+	if next.AssignedTo == ann {
+		t.Fatalf("the turn was parked on ann, who is away: an away member is out of " +
+			"every rotation, so it should have gone to the next active member")
+	}
+
+	// ann comes back, and the held debt is the next thing that happens.
+	setAwayBack(t, db, groupID, ann)
+	patchOccurrence(t, db, groupID, next.ID, next.AssignedTo, "done")
+
+	after := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	if after.AssignedTo != ann {
+		t.Errorf("after ann returned the turn went to %s; her debt should have been "+
+			"waiting rather than cancelled", after.AssignedTo)
 	}
 }
 

@@ -29,13 +29,23 @@ fun nextInRotationAfter(
     val rotation = chore?.rotation.orEmpty()
     if (rotation.size < 2) return null
 
-    val start = rotation.indexOf(occurrence.assignedTo)
+    // Count on from whoever last covered, not from whoever is holding it.
+    //
+    // This mirrors nextCoverer on the server, and it has to: the dialog names
+    // the receiver before the request is sent, so if the two disagree the
+    // dialog promises one person and the board shows another. Counting from
+    // the holder is what made every skip by a serial passer land on the same
+    // neighbour, and it is the version this used to have.
+    val from = occurrence.resumeAfter?.takeIf { it in rotation } ?: occurrence.assignedTo
+    val start = rotation.indexOf(from)
     if (start < 0) return null
 
     val away = members.filter { it.away }.map { it.id }.toSet()
     for (step in 1..rotation.size) {
         val candidate = rotation[(start + step) % rotation.size]
-        if (candidate == occurrence.assignedTo) break
+        // Handing a chore back to yourself is not a pass, so step over the
+        // person doing the passing rather than stopping at them.
+        if (candidate == occurrence.assignedTo) continue
         if (candidate !in away) {
             return members.firstOrNull { it.id == candidate }
         }

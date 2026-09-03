@@ -174,11 +174,27 @@ data class Occurrence(
     @SerializedName("created_at")
     val createdAt: OffsetDateTime? = null,
     /**
-     * Who passed this occurrence away, if anyone (F5). The debt stays with them
-     * through a chain of passes, so the next turn returns here.
+     * The **first** person to pass this occurrence away, if anyone did (F5).
+     *
+     * Every passer in a chain owes a turn back, and they are repaid in the
+     * order they passed; this is the one who is asked first. The full chain is
+     * deliberately not sent: constraint 7 keeps a pass between the two people
+     * it concerns.
      */
     @SerializedName("passed_from")
     val passedFrom: String? = null,
+    /**
+     * Where this chore's rotation picks up once every owed turn is repaid, and
+     * equally who covered the turn that put it here.
+     *
+     * Needed on the client for one reason only: predicting who a busy pass
+     * would go to, which the confirm dialog has to name before the request is
+     * sent. The rotation counts on from here rather than from whoever is
+     * holding the chore, so that a serial passer's skips spread round the
+     * household instead of landing on the same neighbour every time.
+     */
+    @SerializedName("resume_after")
+    val resumeAfter: String? = null,
     /** When it last changed hands — when it became the current holder's turn. */
     @SerializedName("passed_at")
     val passedAt: OffsetDateTime? = null,

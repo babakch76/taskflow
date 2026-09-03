@@ -187,6 +187,17 @@ type Occurrence struct {
 	// Null on a normal advance. It is the difference between "your turn" and
 	// "your turn again, because Maya did the last one for you" — the second of
 	// which the board should say rather than leave to be worked out.
+	// PassedChain and PendingDebts are the turn rule's bookkeeping, and are
+	// deliberately **not** on the wire.
+	//
+	// Constraint 7 keeps a pass between the two people it concerns. Sending
+	// every member a list of who has passed what, or of who owes turns, would
+	// publish exactly what that constraint protects — and a client that could
+	// read it could count it, which Part 0 forbids. The board already shows
+	// the only part anyone else needs: whose name is on the row.
+	PassedChain   []string `json:"-"`
+	PendingDebts  []string `json:"-"`
+
 	CoveredBy     *string `json:"covered_by,omitempty"`
 	CoveredByName *string `json:"covered_by_name,omitempty"`
 
