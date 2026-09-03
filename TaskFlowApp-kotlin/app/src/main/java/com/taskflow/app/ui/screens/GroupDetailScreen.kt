@@ -236,9 +236,21 @@ fun GroupDetailScreen(
     }
 
     LaunchedEffect(state.message) {
-        state.message?.let {
-            snackbarHostState.showSnackbar(it)
-            viewModel.dismissMessage()
+        state.message?.let { text ->
+            // Read once, before showing. The state is cleared as soon as the
+            // snackbar closes, so reading it afterwards would always find null.
+            val undoable = state.undoablePass
+            val result = snackbarHostState.showSnackbar(
+                message = text,
+                actionLabel = undoable?.let { "Undo" },
+                withDismissAction = false,
+                duration = SnackbarDuration.Short,
+            )
+            if (result == SnackbarResult.ActionPerformed && undoable != null) {
+                viewModel.undoPass(undoable)
+            } else {
+                viewModel.dismissMessage()
+            }
         }
     }
 

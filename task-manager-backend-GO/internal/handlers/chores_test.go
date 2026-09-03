@@ -2127,3 +2127,196 @@ func TestChoreEndpointsDoNotCrossGroups(t *testing.T) {
 		}
 	})
 }
+
+func undoPass(t *testing.T, db *database.DB, groupID, occurrenceID, userID string) *httptest.ResponseRecorder {
+	t.Helper()
+	h := &ChoreHandler{DB: db}
+	rec := httptest.NewRecorder()
+	h.UndoPass(rec, request("DELETE",
+		"/groups/"+groupID+"/occurrences/"+occurrenceID+"/pass", "", userID,
+		map[string]string{"group_id": groupID, "occurrence_id": occurrenceID}))
+	return rec
+}
+
+// The whole point: a mis-swipe puts the chore back where it was.
+func TestUndoPassGivesTheChoreBack(t *testing.T) {
+	db := newTestDB(t)
+	ann := newUser(t, db, "ann")
+	bo := newUser(t, db, "bo")
+	groupID := newGroup(t, db, ann, "Flat")
+	addMember(t, db, groupID, bo, "member")
+
+	chore := createChore(t, db, groupID, ann, fmt.Sprintf(`{
+		"name": "Kitchen", "schedule_type": "as_needed", "rotation": [%q, %q]
+	}`, ann, bo))
+
+	occ := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	passOccurrence(t, db, groupID, occ.ID, ann)
+
+	if rec := undoPass(t, db, groupID, occ.ID, ann); rec.Code != 200 {
+		t.Fatalf("undo returned %d: %s", rec.Code, rec.Body.String())
+	}
+
+	after := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	if after.AssignedTo != ann {
+		t.Errorf("assigned to %s after undo, want ann back", after.AssignedTo)
+	}
+	if after.PassedFrom != nil {
+		t.Errorf("passed_from still %v; the pass should leave no trace", *after.PassedFrom)
+	}
+	if after.PassedAt != nil {
+		t.Error("passed_at survived the undo")
+	}
+}
+
+// The reason due_before_pass exists. Passing an overdue chore moves its
+// deadline to tomorrow for the receiver; if the undo left that in place, then
+// pass-then-undo would be a way to launder lateness into a fresh deadline.
+func TestUndoPassRestoresAnOverdueDeadlineRatherThanLaunderingIt(t *testing.T) {
+	db := newTestDB(t)
+	ann := newUser(t, db, "ann")
+	bo := newUser(t, db, "bo")
+	groupID := newGroup(t, db, ann, "Flat")
+	addMember(t, db, groupID, bo, "member")
+
+	chore := createChore(t, db, groupID, ann, fmt.Sprintf(`{
+		"name": "Kitchen", "schedule_type": "interval", "interval_days": 3,
+		"rotation": [%q, %q]
+	}`, ann, bo))
+
+	occ := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	stale := time.Now().AddDate(0, 0, -4)
+	if _, err := db.Exec(`UPDATE occurrences SET due_date = ? WHERE id = ?`, stale.UTC(), occ.ID); err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+
+	passOccurrence(t, db, groupID, occ.ID, ann)
+	handed := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	if handed.DueDate == nil || handed.DueDate.YearDay() != time.Now().AddDate(0, 0, 1).YearDay() {
+		t.Fatalf("precondition: the pass should have moved the date to tomorrow, got %v", handed.DueDate)
+	}
+
+	if rec := undoPass(t, db, groupID, occ.ID, ann); rec.Code != 200 {
+		t.Fatalf("undo returned %d: %s", rec.Code, rec.Body.String())
+	}
+
+	after := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	if after.DueDate == nil {
+		t.Fatal("due date was cleared by the undo")
+	}
+	if after.DueDate.YearDay() != stale.YearDay() {
+		t.Errorf("due %s after undo, want the original %s: taking a pass back must not "+
+			"move a late chore's deadline forward",
+			after.DueDate.Format(time.RFC3339), stale.Format(time.RFC3339))
+	}
+}
+
+// Being handed a chore is not consent to hand it straight back. If the receiver
+// could undo, "pass" and "refuse" would be the same button.
+func TestUndoPassIsRefusedToTheReceiver(t *testing.T) {
+	db := newTestDB(t)
+	ann := newUser(t, db, "ann")
+	bo := newUser(t, db, "bo")
+	groupID := newGroup(t, db, ann, "Flat")
+	addMember(t, db, groupID, bo, "member")
+
+	chore := createChore(t, db, groupID, ann, fmt.Sprintf(`{
+		"name": "Kitchen", "schedule_type": "as_needed", "rotation": [%q, %q]
+	}`, ann, bo))
+
+	occ := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	passOccurrence(t, db, groupID, occ.ID, ann)
+
+	if rec := undoPass(t, db, groupID, occ.ID, bo); rec.Code != 403 {
+		t.Errorf("receiver undoing returned %d, want 403: %s", rec.Code, rec.Body.String())
+	}
+
+	after := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	if after.AssignedTo != bo {
+		t.Errorf("the refused undo still moved the chore: assigned to %s", after.AssignedTo)
+	}
+}
+
+// The window is measured on the server from passed_at, because the snackbar's
+// own timer is not evidence.
+func TestUndoPassIsRefusedOnceTheWindowHasClosed(t *testing.T) {
+	db := newTestDB(t)
+	ann := newUser(t, db, "ann")
+	bo := newUser(t, db, "bo")
+	groupID := newGroup(t, db, ann, "Flat")
+	addMember(t, db, groupID, bo, "member")
+
+	chore := createChore(t, db, groupID, ann, fmt.Sprintf(`{
+		"name": "Kitchen", "schedule_type": "as_needed", "rotation": [%q, %q]
+	}`, ann, bo))
+
+	occ := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	passOccurrence(t, db, groupID, occ.ID, ann)
+
+	stale := time.Now().Add(-passUndoWindow - time.Minute).UTC().Format("2006-01-02 15:04:05")
+	if _, err := db.Exec(`UPDATE occurrences SET passed_at = ? WHERE id = ?`, stale, occ.ID); err != nil {
+		t.Fatalf("backdate passed_at: %v", err)
+	}
+
+	if rec := undoPass(t, db, groupID, occ.ID, ann); rec.Code != 409 {
+		t.Errorf("late undo returned %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Nothing to take back, and nothing to take back *from*.
+func TestUndoPassIsRefusedWhenItWouldMakeNoSense(t *testing.T) {
+	db := newTestDB(t)
+	ann := newUser(t, db, "ann")
+	bo := newUser(t, db, "bo")
+	groupID := newGroup(t, db, ann, "Flat")
+	addMember(t, db, groupID, bo, "member")
+
+	chore := createChore(t, db, groupID, ann, fmt.Sprintf(`{
+		"name": "Kitchen", "schedule_type": "as_needed", "rotation": [%q, %q]
+	}`, ann, bo))
+
+	occ := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+
+	// Never passed.
+	if rec := undoPass(t, db, groupID, occ.ID, ann); rec.Code != 409 {
+		t.Errorf("undo of an unpassed occurrence returned %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+
+	// Passed, then actually done by the receiver: the work has happened, so
+	// there is nothing to reclaim.
+	passOccurrence(t, db, groupID, occ.ID, ann)
+	patchOccurrence(t, db, groupID, occ.ID, bo, "done")
+	if rec := undoPass(t, db, groupID, occ.ID, ann); rec.Code != 409 {
+		t.Errorf("undo after completion returned %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Constraint 7 keeps a pass between the two people it concerns, and an undo is
+// part of the same private exchange.
+func TestUndoPassWritesNoActivityEvent(t *testing.T) {
+	db := newTestDB(t)
+	ann := newUser(t, db, "ann")
+	bo := newUser(t, db, "bo")
+	groupID := newGroup(t, db, ann, "Flat")
+	addMember(t, db, groupID, bo, "member")
+
+	chore := createChore(t, db, groupID, ann, fmt.Sprintf(`{
+		"name": "Kitchen", "schedule_type": "as_needed", "rotation": [%q, %q]
+	}`, ann, bo))
+
+	occ := openOccurrencesFor(t, db, groupID, ann, chore.ID)[0]
+	passOccurrence(t, db, groupID, occ.ID, ann)
+
+	var before int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM activity_events WHERE group_id = ?`, groupID).Scan(&before); err != nil {
+		t.Fatalf("count before: %v", err)
+	}
+	undoPass(t, db, groupID, occ.ID, ann)
+	var after int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM activity_events WHERE group_id = ?`, groupID).Scan(&after); err != nil {
+		t.Fatalf("count after: %v", err)
+	}
+	if after != before {
+		t.Errorf("the undo wrote %d activity event(s); a pass and its undo are private", after-before)
+	}
+}

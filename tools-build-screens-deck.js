@@ -157,7 +157,7 @@ contentSlide(
   "The only two exits from a turn besides doing it. Neither cancels what you owe.",
   [
     { file: "25-pass-confirm.png", label: "Passing it on", note: "Says who is told, and that nobody else is" },
-    { file: "26-after-pass.png", label: "After the pass", note: "It moves, and it comes back next cycle" },
+    { file: "26-after-pass.png", label: "After the pass", note: "It moves, it returns next cycle, and Undo catches a mis-swipe" },
     { file: "20-away-dialog.png", label: "Going away", note: "States the rule before you commit" },
     { file: "16-members.png", label: "The household", note: "Away is shown; a pass never is" },
   ],

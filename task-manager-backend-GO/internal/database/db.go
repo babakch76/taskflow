@@ -370,6 +370,14 @@ func addMissingColumns(db *sql.DB) error {
 		// which is the one moment the board has something to explain: the row
 		// came back to you because somebody else did the last one.
 		{table: "occurrences", name: "covered_by", ddl: `ALTER TABLE occurrences ADD COLUMN covered_by TEXT REFERENCES users(id)`},
+		// The due date a pass overwrote, so taking the pass back can put it back
+		// exactly.
+		//
+		// The pass rule moves an already-overdue chore's deadline to tomorrow for
+		// whoever receives it, which is a kindness to them and a loophole for the
+		// passer: without this column, pass-then-undo would quietly turn a late
+		// chore into one due tomorrow.
+		{table: "occurrences", name: "due_before_pass", ddl: `ALTER TABLE occurrences ADD COLUMN due_before_pass DATETIME`},
 		{table: "users", name: "quiet_from", ddl: `ALTER TABLE users ADD COLUMN quiet_from TEXT NOT NULL DEFAULT '21:00'`},
 		{table: "users", name: "quiet_to", ddl: `ALTER TABLE users ADD COLUMN quiet_to TEXT NOT NULL DEFAULT '09:00'`},
 	}

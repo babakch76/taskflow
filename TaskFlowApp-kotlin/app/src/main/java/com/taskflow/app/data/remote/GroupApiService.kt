@@ -210,6 +210,24 @@ interface GroupApiService {
         @Path("occurrence_id") occurrenceId: String,
     ): Response<Occurrence>
 
+    /**
+     * Take back a pass you have just made.
+     *
+     * For a mis-swipe, not for a change of mind: the server allows it only for
+     * a couple of minutes after the pass, only for the person who passed it,
+     * and only while it is still open. Refused with 403 if you were the
+     * receiver rather than the passer, and 409 once the window has closed, the
+     * chore has been done, or it was never passed at all.
+     *
+     * The due date the pass may have moved is restored too, so an overdue chore
+     * comes back overdue rather than with tomorrow's deadline attached.
+     */
+    @DELETE("groups/{group_id}/occurrences/{occurrence_id}/pass")
+    suspend fun undoPass(
+        @Path("group_id") groupId: String,
+        @Path("occurrence_id") occurrenceId: String,
+    ): Response<Occurrence>
+
     /** Declare yourself away from this household, or back (F5). */
     @PUT("groups/{group_id}/members/me/away")
     suspend fun setAway(

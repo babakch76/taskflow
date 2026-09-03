@@ -52,6 +52,15 @@ const occurrenceJoins = `JOIN chores c ON c.id = o.chore_id
 // would otherwise rewrite completions from any point in the past.
 const undoWindow = 10 * time.Minute
 
+// passUndoWindow is how long after passing a chore on it can be taken back.
+//
+// Much shorter than undoWindow, and for a reason: undoing a completion only
+// rewrites your own history, while undoing a pass takes work off somebody
+// else's board after they have been told it is theirs. Two minutes covers a
+// mis-swipe noticed immediately, which is all this is for; a genuine change of
+// mind belongs in a conversation, not in a silent reassignment.
+const passUndoWindow = 2 * time.Minute
+
 // Bounds on an interval chore's period, in days. Wide on purpose — these are
 // here to catch a typo, not to curate the household's choices.
 const (
@@ -881,17 +890,120 @@ func (h *ChoreHandler) PassOccurrence(w http.ResponseWriter, r *http.Request) {
 		passedFrom = &current.AssignedTo
 	}
 
+	// due_before_pass remembers the date this pass is about to overwrite, so
+	// UndoPass can put it back exactly.
+	//
+	// Without it an undo would be a way to launder lateness: pass an overdue
+	// chore, take it straight back, and the rule above has quietly moved its
+	// deadline to tomorrow. COALESCE so a chain of passes keeps the *first*
+	// original rather than each pass overwriting the last, since the debt and
+	// therefore the right to undo belong to whoever passed it first.
 	if _, err := h.DB.Exec(
 		`UPDATE occurrences
-		 SET assigned_to = ?, due_date = ?, passed_from = ?, passed_at = ?
+		 SET assigned_to = ?, due_date = ?, passed_from = ?, passed_at = ?,
+		     due_before_pass = COALESCE(due_before_pass, ?)
 		 WHERE id = ?`,
-		receiver, dueDate, passedFrom, now.UTC(), occurrenceID,
+		receiver, dueDate, passedFrom, now.UTC(), current.DueDate, occurrenceID,
 	); err != nil {
 		log.Printf("PassOccurrence: update failed for %s: %v", occurrenceID, err)
 		jsonError(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
+	updated, err := h.loadOccurrence(occurrenceID)
+	if err != nil {
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	jsonResponse(w, http.StatusOK, updated)
+}
+
+// UndoPass handles DELETE /groups/{group_id}/occurrences/{occurrence_id}/pass
+//
+// Takes back a pass, for the case the pass was a mistake: the swipe caught the
+// wrong row, or the wrong finger. It is not a way to change your mind later,
+// which is why the window is [passUndoWindow] and not [undoWindow].
+//
+// Narrow on purpose:
+//
+//   - Only the person the debt belongs to, which is `passed_from`. Not the
+//     receiver: being handed a chore is not consent to hand it back, and if it
+//     were, "pass" and "refuse" would be the same button.
+//   - Only while it is still open. Undoing a pass whose receiver has already
+//     done the chore would take away work that has actually happened.
+//   - Only inside the window, measured from `passed_at` on the server. The
+//     snackbar's own timer is not evidence: a client can be slow, paused, or
+//     lying.
+//
+// The due date is restored from `due_before_pass` rather than left as the pass
+// set it. See the comment where that column is written.
+func (h *ChoreHandler) UndoPass(w http.ResponseWriter, r *http.Request) {
+	groupID := r.PathValue("group_id")
+	occurrenceID := r.PathValue("occurrence_id")
+	userID := middleware.GetUserID(r)
+
+	current, err := h.loadOccurrence(occurrenceID)
+	if err == sql.ErrNoRows || (current != nil && current.GroupID != groupID) {
+		jsonError(w, "occurrence not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	if current.PassedFrom == nil {
+		jsonError(w, "this occurrence has not been passed", http.StatusConflict)
+		return
+	}
+	if *current.PassedFrom != userID {
+		jsonError(w, "only the person who passed it can take it back", http.StatusForbidden)
+		return
+	}
+	if current.Status != models.OccurrenceOpen {
+		jsonError(w, "it has already been done, so there is nothing to take back", http.StatusConflict)
+		return
+	}
+	if current.PassedAt == nil || time.Since(*current.PassedAt) > passUndoWindow {
+		jsonError(w, "too late to take this pass back", http.StatusConflict)
+		return
+	}
+
+	// Read plainly, not through COALESCE or MAX: go-sqlite3 decides whether to
+	// parse a DATETIME from the column's *declared* type, and a wrapping
+	// function throws that away and hands back a raw string. This has bitten
+	// twice in this file's history.
+	var dueBefore sql.NullTime
+	if err := h.DB.QueryRow(
+		`SELECT due_before_pass FROM occurrences WHERE id = ?`, occurrenceID,
+	).Scan(&dueBefore); err != nil {
+		log.Printf("UndoPass: reading due_before_pass for %s: %v", occurrenceID, err)
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// A chore with no date at all (as-needed) has nothing to restore, and the
+	// pass will not have invented one either.
+	restored := current.DueDate
+	if dueBefore.Valid {
+		restored = &dueBefore.Time
+	}
+
+	if _, err := h.DB.Exec(
+		`UPDATE occurrences
+		 SET assigned_to = ?, due_date = ?, passed_from = NULL, passed_at = NULL,
+		     due_before_pass = NULL
+		 WHERE id = ?`,
+		userID, restored, occurrenceID,
+	); err != nil {
+		log.Printf("UndoPass: update failed for %s: %v", occurrenceID, err)
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// No activity event, for the same reason the pass itself writes none:
+	// constraint 7 keeps a pass between the two people involved, and an undo
+	// is part of the same private exchange.
 	updated, err := h.loadOccurrence(occurrenceID)
 	if err != nil {
 		jsonError(w, "internal error", http.StatusInternalServerError)

@@ -85,17 +85,22 @@ starters, appearance toggle. Three things the next session needs to know:
    feed's timestamps were moved to match** — before that, the history screen
    said "Done Thu 27 Aug" while the feed said "1h" for the same event, which a
    careful reader of the report would have caught.
-2. **One thing is still parked on a decision:** Undo on the pass snackbar. It
-   needs an endpoint that does not exist (`DELETE /occurrences/{id}/pass`), and
-   there is a catch worth knowing before building it — the receiver's "your
-   turn" reminder is scheduled *on their device*, so an undo cannot recall a
-   notification that has already fired. The confirm dialog is the safety net
-   for now.
+2. **Nothing is parked on a decision any more.** All four open questions were
+   answered on 3 September:
 
-   **B-14 is closed** (2026-09-03): an interval chore done early keeps pulling
-   its schedule earlier, unchanged, and BACKLOG records the three reasons. The
-   **em-dash sweep of code comments** was also declined — user-facing strings
-   are clean and the comments stay as they are.
+   - **Undo on the pass snackbar: built.** `DELETE /groups/{id}/occurrences/
+     {id}/pass`, scoped to a mis-swipe with a 2-minute server-side window. It
+     needed a migration, which BACKLOG explains: without `due_before_pass`,
+     pass-then-undo would launder an overdue chore into one due tomorrow. **The
+     limit to state in the report:** the receiver's "your turn" reminder is
+     scheduled on *their* device, so no undo can recall a notification that has
+     already fired. The window is short partly for that reason.
+   - **Rotation drag: built**, and the deck's original wording restored.
+   - **B-14: no change.** An interval chore done early keeps pulling its
+     schedule earlier. BACKLOG records the three reasons, including the ratchet
+     that was accepted rather than missed.
+   - **Em-dash sweep of code comments: declined.** User-facing strings are
+     clean; the comments stay.
 3. **The app's copy and the research deck differ in one place**: the create
    flow's **first screen**, shortened at Babak's direction. Say so in the
    report — the deck is the stimulus that was *designed*, so a session run

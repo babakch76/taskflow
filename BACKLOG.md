@@ -320,6 +320,53 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
     except the screen the away person is actually looking at.
   - **The Board tab counts open rows** (B-11).
   Device-verified throughout; the details are in each commit message.
+- **Undo on the pass snackbar — DONE** (2026-09-03, Babak's call). The v2
+  design showed an Undo on "Passed to maya. It's yours again next cycle." and
+  there was none. `DELETE /groups/{id}/occurrences/{id}/pass` now exists.
+
+  **Scoped to a mis-swipe, not a change of mind**, which is what Babak asked
+  for once the two were separated. `passUndoWindow` is 2 minutes, against the
+  10 of `undoWindow`: undoing a completion only rewrites your own history,
+  while undoing a pass takes work off somebody else's board after they have
+  been told it is theirs.
+
+  Four guards, each with a test:
+
+  - Only the person the debt belongs to (`passed_from`). **Not the receiver**:
+    being handed a chore is not consent to hand it back, and if it were, "pass"
+    and "refuse" would be the same button.
+  - Only while it is still open, so an undo cannot take away work that has
+    actually happened.
+  - Only inside the window, measured on the server from `passed_at`. The
+    snackbar's own timer is not evidence; a client can be slow or paused.
+  - No activity event, matching the pass itself. Constraint 7 keeps a pass
+    between the two people involved and an undo is the same exchange.
+
+  **The part that needed a migration.** The pass rule moves an already-overdue
+  chore's deadline to tomorrow for whoever receives it. A naive undo would
+  leave that in place, which makes pass-then-undo **a way to launder
+  lateness**: a chore four days late comes back due tomorrow. So the pass now
+  records the date it overwrote in a new `occurrences.due_before_pass` column
+  and the undo restores it exactly. Written with `COALESCE` so a chain of
+  passes keeps the *first* original, since the debt and the right to undo
+  belong to whoever passed it first. Read with a plain `SELECT`, never through
+  a wrapping function, because go-sqlite3 decides whether to parse a DATETIME
+  from the column's declared type and `COALESCE`/`MAX` throw that away. That
+  has bitten this file twice.
+
+  Verified past the unit tests: the migration ran against the populated local
+  database with every row count unchanged, the four HTTP paths were exercised
+  with curl (200 restore, 409 never-passed, 403 receiver, 200 passer), and the
+  button itself was driven on the device with Logcat showing `POST .../pass`
+  then `DELETE .../pass` two seconds apart, both 200. The seed was left
+  canonical afterwards, and the activity table still held 14 rows, which is the
+  privacy guard proving itself rather than being asserted.
+
+  **One client-side trap worth keeping.** The snackbar message and the Undo
+  offer are written in a *single* state update. Two updates would let the
+  snackbar be composed from the first and read an offer that had not landed
+  yet, which shows up as an Undo button that is intermittently missing.
+
 - **The return marker said the wrong thing to the wrong person — FIXED**
   (2026-09-03, reported by Babak). The line under a chore that has come back to
   you after a cover read **"Back to you after maya covered"**. Two defects, one

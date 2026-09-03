@@ -76,6 +76,14 @@ data class GroupDetailUiState(
     val error: String? = null,
     /** Transient message for a single failed/successful action. */
     val message: String? = null,
+    /**
+     * The occurrence a just-shown message can still undo, if any.
+     *
+     * Only ever set alongside [message], and only for a pass. It is what turns
+     * the snackbar into an offer rather than a notification: the server keeps
+     * its own window, so this is the offer and not the permission.
+     */
+    val undoablePass: String? = null,
     /** Set after generating a shareable invite code, so the UI can display it. */
     val inviteCode: String? = null,
     /** Flipped once the user has left the group, so the screen can navigate away. */
@@ -358,7 +366,10 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
     }
 
     fun dismissMessage() {
-        _uiState.value = _uiState.value.copy(message = null)
+        // The offer goes with the message it belonged to. A stale Undo sitting
+        // on the next snackbar would be a button that reassigns a chore
+        // nobody was talking about.
+        _uiState.value = _uiState.value.copy(message = null, undoablePass = null)
     }
 
     fun dismissInviteCode() {
@@ -471,11 +482,37 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
      * from the board a week later.
      */
     fun passOccurrence(occurrence: Occurrence, receiverName: String? = null) {
+        val passed = receiverName?.let { "Passed to $it. It's yours again next cycle." }
+            ?: "Passed on. It comes back to you next cycle."
         runAction(
-            successMessage = receiverName?.let { "Passed to $it. It's yours again next cycle." }
-                ?: "Passed on. It comes back to you next cycle.",
+            // The message is written here rather than through successMessage so
+            // that it and the Undo offer land in a *single* state write. Two
+            // writes would let the snackbar be composed from the first one and
+            // read an offer that had not arrived yet, which is a race that
+            // shows up as an Undo button that is sometimes missing.
+            onResult = { failure ->
+                _uiState.value = _uiState.value.copy(
+                    message = failure ?: passed,
+                    undoablePass = if (failure == null) occurrence.id else null,
+                )
+            },
         ) {
             api.passOccurrence(groupId, occurrence.id)
+        }
+    }
+
+    /**
+     * Take back the pass the snackbar is offering to undo.
+     *
+     * For the swipe that caught the wrong row. The server decides whether it is
+     * still allowed, and says why when it is not: the window is measured there
+     * from `passed_at`, because a client's own timer is not evidence. Whatever
+     * it says is what the person sees, rather than a generic failure.
+     */
+    fun undoPass(occurrenceId: String) {
+        _uiState.value = _uiState.value.copy(undoablePass = null)
+        runAction(successMessage = "Back with you.") {
+            api.undoPass(groupId, occurrenceId)
         }
     }
 
