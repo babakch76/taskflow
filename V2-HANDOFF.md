@@ -291,10 +291,36 @@ happens when the board is read.
    `buildConfigField` the compiler inlines, and verifying the URL in Logcat's
    `okhttp` lines rather than in the generated source.
 
-   **One consequence:** the live server is now three commits behind. B-15's
-   history `ORDER BY` tiebreaker, the `schedule_type` and re-dating work in
-   `UpdateChore` (v2 UI phase 4), and the `covered_by` column (phase 2) all
-   landed on `main` after SSH closed.
+   ~~**One consequence:** the live server is now three commits behind.~~
+   **Deployed 2026-09-03 22:14 UTC**, commit `4556246`, with
+   [`tools-deploy.sh`](tools-deploy.sh). The gap is closed.
+
+   Verified rather than assumed: a WAL-safe backup and a copy of the outgoing
+   binary at `~/backups/*-20260903T221349Z*`, **all ten tables' row counts
+   identical across the restart**, all four new columns present
+   (`covered_by`, `due_before_pass`, `passed_chain`, `pending_debts`), and the
+   running process's `/proc/<pid>/exe` confirmed as the newly installed binary
+   rather than merely the file on disk.
+
+   **Two things this deploy corrected about this document.**
+
+   1. **The previous live binary was 1 September, not 2.** Its mtime and the
+      service's start time were both `Sep 1 23:23`. Section 5's claim that the
+      backend "was redeployed from `main` on 2 September" is not supported by
+      the box: whatever happened that day did not replace the binary. Treat
+      deploy claims here as unverified unless they name evidence.
+
+   2. **The unit runs `/opt/taskflow/taskflow-server`, not
+      `/opt/taskflow/taskflow`.** The first version of the deploy script
+      assumed the latter, and that mistake is invisible: a new binary lands at
+      a path nothing executes, the service restarts happily on the old one,
+      the row counts are untouched and the smoke test answers 401 — a deploy
+      that reports success having changed nothing. The script now reads
+      `ExecStart` from the unit and refuses to run if it cannot.
+
+   **Remove the temporary SSH rule.** `sgr-0d9c6ea2c809c9b4c` was opened to the
+   deploying agent's egress address for this. It is a `/32` for an address
+   nobody here controls, so it should not outlive the deploy.
 
    Nothing is broken by the gap, but two of the three matter to the client:
    without phase 4's change the live server rejects a schedule-type edit, and

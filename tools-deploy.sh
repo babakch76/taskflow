@@ -23,7 +23,13 @@ KEY="${KEY:-$HOME/.ssh/taskflow-key.pem}"
 SRC_DIR="task-manager-backend-GO"
 REMOTE_SRC="~/taskflow-src"
 REMOTE_DB="/var/lib/taskflow/taskmanager.db"
-BIN="/opt/taskflow/taskflow"
+# Read from the unit, not guessed. The unit runs taskflow-server; installing to
+# /opt/taskflow/taskflow instead puts a new binary at a path nothing executes,
+# and then every check downstream still passes: the service restarts happily on
+# the old binary, the row counts are untouched, and the smoke test answers.
+# A deploy that reports success having changed nothing is the worst outcome
+# here, so the path is derived rather than assumed.
+BIN="${BIN:-}"
 SERVICE="taskflow"
 # Every table, so "nothing was disturbed" means all of it rather than the two
 # tables somebody happened to think of.
@@ -60,6 +66,20 @@ EOF
   exit 1
 fi
 echo "   ssh ok: $(ssh_ 'hostname')"
+
+# Whatever the unit actually executes is what gets replaced.
+if [ -z "$BIN" ]; then
+  BIN="$(ssh_ "sudo systemctl cat $SERVICE" | sed -n "s/^ExecStart=//p" | cut -d" " -f1)"
+fi
+case "$BIN" in
+  /*) ;;
+  *)
+    echo "   Could not read an absolute ExecStart path from $SERVICE (got '$BIN')."
+    echo "   Stopping rather than guessing where the binary lives."
+    exit 1
+    ;;
+esac
+echo "   the unit runs: $BIN"
 [ -n "${DRY_RUN:-}" ] && { echo "   DRY_RUN set, stopping here."; exit 0; }
 
 # ── 2. Back up before anything moves ──────────────────────────────────────
@@ -130,9 +150,12 @@ for path in /auth/login /groups /health; do
 done
 cat <<EOF
 
-   401 on a guarded path and 400 on /auth/login with no body are both correct:
-   the auth middleware wraps every route, so 401 means "reachable and refusing
-   me", which is the most an unauthenticated smoke test can prove.
+   401 on every path is correct, including /health and /auth/login: these are
+   GETs, and the auth middleware wraps every route. 401 means "reachable and
+   refusing me", which is the most an unauthenticated smoke test can prove.
+   It cannot tell you *which* build is live, because an unknown path answers
+   401 too. Section 7 above is the real version check: the columns only exist
+   if the new binary ran its migrations.
 
 Deployed $(git rev-parse --short HEAD) to $HOST.
 EOF
