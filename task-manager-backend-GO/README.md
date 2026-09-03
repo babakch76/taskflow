@@ -1,7 +1,13 @@
-# Task Manager Backend (Go)
+# TaskFlow backend (Go)
 
-A REST API backend for a collaborative task manager supporting private groups,
-invite-based membership, and task management with progress tracking.
+The API behind TaskFlow, a chore board for a household that shares one:
+private households, invite-based membership, recurring chores with a rotation,
+and a record of who did what.
+
+**"Progress tracking" is gone**, and its absence is a requirement rather than an
+omission: no scores, percentages, streaks or rankings anywhere. See
+[`../FEATURES.md`](../FEATURES.md) section 8 for the full list of what this
+deliberately does not do.
 
 ## Architecture
 
@@ -48,19 +54,25 @@ POST /auth/login     { "email", "password" }               → { token, user }
 ```
 POST   /groups                    { "name", "description" }  → group
 GET    /groups                                               → [groups]
-GET    /groups/:group_id                                     → group + progress
+GET    /groups/:group_id                                     → group
 GET    /groups/:group_id/members                             → [members]
 
 # Leave a group (removes only the caller's membership)
 DELETE /groups/:group_id/members/me                          → { message }
 
-# Promote a member to manager, or demote them (OWNER ONLY)
-PATCH  /groups/:group_id/members/:user_id/role  { "role": "admin"|"member" }
+# Away, or back (F5). `until` is RFC 3339, or null for open-ended.
+PUT    /groups/:group_id/members/me/away  { "away", "until?" }  → { message }
 ```
 
-`GET /groups/:group_id` also returns `my_role` — the caller's own role — so a
-client can gate its UI without fetching the member list and working out which
-row is itself.
+`GET /groups/:group_id` still returns `my_role`, the caller's own role.
+
+**There is no role endpoint.** `PATCH /members/:user_id/role` was removed with
+the manager role: the spec makes chore editing open to every member, so a
+permission gate contradicted it. `group_members.role` still accepts `admin` at
+the schema level because dropping a CHECK constraint rewrites the table for no
+gain, but nothing sets it and nothing reads it. Ownership is the only
+distinction left, and it does exactly one thing: the owner cannot leave a
+household while other members remain.
 
 `DELETE /members/me` has three outcomes:
 
@@ -70,12 +82,75 @@ row is itself.
 | Owner, other members still present  | `409` — ownership transfer is out of scope     |
 | Any other member                    | `200` — membership row removed                 |
 
+### Chores and occurrences
+
+The recurring half of the board, and the part with all the rules in it. A
+**chore** is the arrangement; an **occurrence** is one turn of it. Completing an
+occurrence creates the next one, which is the only way a turn moves.
+
+```
+POST   /groups/:group_id/chores    { "name", "schedule_type", "interval_days?",
+                                     "fixed_weekdays?", "fixed_month_days?",
+                                     "needed_by_time?", "done_line?", "rotation" }
+GET    /groups/:group_id/chores                              → [chores]
+PATCH  /groups/:group_id/chores/:chore_id                    → chore
+DELETE /groups/:group_id/chores/:chore_id                    → { message }
+
+GET    /groups/:group_id/occurrences                         → [occurrences]
+
+# Mark done, or undo that. Anyone may mark anything done; undo is only for the
+# person who marked it, and only inside 10 minutes.
+PATCH  /groups/:group_id/occurrences/:occurrence_id  { "status": "open"|"done" }
+
+# The busy pass (F5), and taking one back within 2 minutes.
+POST   /groups/:group_id/occurrences/:occurrence_id/pass     → occurrence
+DELETE /groups/:group_id/occurrences/:occurrence_id/pass     → occurrence
+
+# Bring a day forward. Only when a whole household passed and the chore came
+# back to whoever asked first; only earlier, never later.
+PUT    /groups/:group_id/occurrences/:occurrence_id/due-date  { "due_date" }
+```
+
+`schedule_type` is `interval`, `fixed_date` or `as_needed`. A one-off is a
+**task**, not a chore, and lives under the task endpoints below.
+
+Two fields on an occurrence are deliberately **not** serialised: `passed_chain`
+(everyone who has passed it) and `pending_debts` (turns still owed). Publishing
+either would undo the privacy of the busy pass, and a client that could read
+them could count them. The turn rule itself is documented in
+[`../FEATURES.md`](../FEATURES.md) section 4, and case by case in
+`internal/handlers/turn_rule_test.go`.
+
+### History
+
+```
+GET /groups/:group_id/history                       → per-person record
+GET /groups/:group_id/chores/:chore_id/history      → one chore, every completion
+```
+
+Counts, never ranks. `internal/handlers/history.go` carries the constraint in a
+comment and `history_test.go` asserts that words like `late`, `overdue`,
+`missed` and `streak` appear nowhere in the payload.
+
+### The signed-in user
+
+```
+GET   /me                                        → user
+PATCH /me   { "quiet_from?", "quiet_to?" }       → user
+```
+
+Quiet hours live on the **user**, not the group: one window applying to
+reminders from every household they belong to.
+
 ### Activity feed
 
 ```
 GET /groups/:group_id/activity                  → [events]  (newest first)
 GET /groups/:group_id/activity?since=<RFC3339>  → [events]  (newer than `since`)
 ```
+
+**A busy pass writes no event here**, nor does undoing one. That is the one
+deliberate hole in the feed, and it is what makes the pass private.
 
 An append-only trail of what members did, joined with the actor's username so
 the client can render it without a second request. This is the polling target
@@ -124,19 +199,25 @@ PATCH  /invites/:invite_id             { "action": "accept"|"decline" }
 
 ### Tasks (must be group member)
 
+A **task** is the app's one-off: given to one person once, with no rotation and
+no turn to owe. Tasks predate the chore model and are the spec's one-off type,
+so they stay on the board beside occurrences rather than being migrated.
+
 ```
 POST   /groups/:group_id/tasks         { "title", "description", "assigned_to?", "due_date?" }
 GET    /groups/:group_id/tasks                               → [tasks]
 PATCH  /groups/:group_id/tasks/:id     { "title?", "status?", "assigned_to?", "due_date?" }
 DELETE /groups/:group_id/tasks/:id
-
-# Bulk status change (multi-select UI) — one transaction, one activity event
-PATCH  /groups/:group_id/tasks         { "task_ids": [...], "status": "done" }  → [tasks]
 ```
 
-The bulk endpoint rejects an empty `task_ids` with `400` and verifies that every
-id belongs to `:group_id` before writing anything — if one does not, the whole
-call fails with `404` and nothing is modified.
+**There is no bulk endpoint.** `PATCH /groups/:group_id/tasks` was removed with
+the multi-select UI it existed for; nothing had called it since. Its
+`tasks_bulk_updated` activity constant and the client's rendering of that
+constant both stay, because rows written before the removal still carry it.
+
+`status` accepts `todo`, `in_progress` or `done` at the schema level, but the
+app only ever writes `todo` and `done`: the middle state was dropped with the
+status chips. The feed still renders `in_progress` for old rows.
 
 ### PATCH field semantics
 
@@ -153,35 +234,32 @@ A patch with no recognised fields is rejected with
 
 ## Roles and permissions
 
-`group_members.role` is one of `owner`, `admin` or `member`. `admin` is what
-the UI calls **Manager**; the stored value stays `admin` because changing it
-would mean rebuilding the table — SQLite cannot alter a CHECK constraint in
-place — for a purely cosmetic difference.
+**Nothing is gated by role.** Every member can create, edit and delete chores
+and tasks, set and clear deadlines, invite, and leave.
 
-Exactly one thing is gated by role today:
+This section used to describe a **Manager** role that could set deadlines when
+members could not. It was removed: the spec makes chore editing open to every
+member, so the gate contradicted the thing it was guarding. `BACKLOG.md` records
+it under the manager-role removal.
 
-| Action | owner | admin (manager) | member |
-|---|:--:|:--:|:--:|
-| Set or clear a task's `due_date` | ✅ | ✅ | ❌ 403 |
-| Change another member's role | ✅ | ❌ | ❌ |
-| Everything else (create/edit/delete tasks, invite, leave) | ✅ | ✅ | ✅ |
+What remains:
 
-Deliberately narrow. Broader role-based permissions were deferred pending
-need-finding interviews, so only what was actually asked for is enforced.
+- `group_members.role` still stores `owner` or `member`, and its CHECK still
+  accepts `admin` because dropping a CHECK constraint means rebuilding the table
+  in SQLite, for no gain. Nothing writes `admin` and nothing reads it.
+- `GET /groups/:group_id` returns `my_role`, which clients use for labelling
+  rather than for gating.
+- **Ownership does exactly one thing:** `LeaveGroup` returns `409` when an owner
+  tries to leave a household that still has other members. There is one owner,
+  set at creation, and ownership transfer is out of scope.
 
-Two invariants worth keeping:
+Non-members get `404` rather than `403`, so the API never confirms that a
+household exists to somebody who is not in it.
 
-- **The owner's role cannot be changed**, including by themselves. There is one
-  owner, set at creation. This matches `LeaveGroup`, which returns 409 when an
-  owner tries to leave a group that still has other members.
-- **The due-date check hangs off whether `due_date` is *present* in the patch**,
-  not off the request as a whole. A member editing only a title is unaffected,
-  because `Patchable.Absent` keeps the key out of the JSON and `Present` stays
-  false. This is the tri-state contract doing real work.
-
-Non-members get `404`; members who lack the role get `403`. The distinction is
-deliberate — a 404 would wrongly imply the group or task doesn't exist to
-someone who can plainly see it.
+The tri-state patch contract that the old deadline gate relied on is still
+worth knowing about, because it is load-bearing elsewhere: `Patchable` tells
+"absent" apart from "present and null", which is how a client clears a field
+without every silent field being wiped. See `internal/models/Patchable`.
 
 ## Data Siloing
 

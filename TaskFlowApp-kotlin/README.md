@@ -5,6 +5,10 @@ Retrofit + OkHttp + Gson for networking, EncryptedSharedPreferences for the JWT.
 
 - minSdk 26, targetSdk/compileSdk 34
 - Kotlin 2.0, AGP 8.4, Java 17
+> **What the app actually does** is documented in
+> [`../FEATURES.md`](../FEATURES.md). This file is about how the Android side is
+> put together.
+
 - No DI framework — the two long-lived singletons (`TokenManager`,
   `RetrofitClient`) are created once in `TaskFlowApp.onCreate()`
 
@@ -156,21 +160,33 @@ the unsigned APK and the signing step is skipped.
 |---|---|
 | `LoginScreen` / `RegisterScreen` | Auth, with a text-button toggle between them. Register returns a token, so it signs you straight in. |
 | `DashboardScreen` | Your groups; create new ones; **join existing ones** — a badged inbox for pending invites (accept/decline) and "Join with a code" in the overflow menu. |
-| `GroupDetailScreen` | Three tabs — **Tasks**, **Activity**, **Members** — plus a progress header, an overflow menu for invites and leaving, and multi-select on tasks. |
+| `GroupDetailScreen` | Three tabs — **Board**, **Activity**, **Members** — plus an overflow menu for invites, the household's record, going away, and leaving. |
+| `CreateChoreFlow` | Adding or editing a chore, as two full-screen steps. Also the delete. |
+| `FirstRunStarters` | The five starter chores a brand-new household is offered. |
 
 `GroupDetailScreen` covers the whole group-scoped API:
 
-- **Tasks** — tap a card to cycle `todo → in_progress → done`; the checkboxes
-  enter multi-select, which uses the single-transaction bulk endpoint rather
-  than N round trips. The `✕` on an assignee chip unassigns via
-  `Patchable.SetNull`, sending an explicit `{"assigned_to":null}`.
-- **Activity** — polled every 5s with `?since=`, so a teammate's change appears
-  without a manual refresh. This is the CSCW awareness/feedback loop.
-- **Members** — the roster, with invite-by-username and shareable invite codes
-  in the overflow menu, plus leave-group.
+- **Board** — the app's main screen. Rows grouped **YOURS / OTHERS / DONE THIS
+  CYCLE**, three lines each, with a fourth only when the turn rule has something
+  to explain. One tap on the checkbox marks done, by anybody, undoable for ten
+  minutes by whoever ticked it. Swiping your own row passes it on, and the
+  snackbar offers Undo. Overdue is amber, never red, and the amber comes from
+  the theme so it survives the appearance setting.
+- **Activity** — polled every 5s with `?since=`, so a housemate's change appears
+  without a manual refresh. This is the CSCW awareness/feedback loop. A busy
+  pass deliberately writes nothing here.
+- **Members** — the roster, showing who is away, with invite-by-username and
+  shareable invite codes in the overflow menu, plus leave-group.
 
-Loading is concurrent: opening a group fires the group, tasks, members and
-activity requests together, so it costs one round trip rather than four.
+Loading is concurrent: opening a group fires the group, occurrences, chores,
+tasks, members and activity requests together rather than in sequence.
+
+**What used to be here and is not any more**, since this file described it for a
+month after it went: the **Tasks** tab is now **Board**; the progress header was
+removed because a percentage on every board is a constraint-4 violation;
+multi-select and the bulk endpoint are gone; and a card no longer cycles
+`todo → in_progress → done`, because the status chips went with the pivot and
+the two states that remain are open and done.
 
 ### Both ways of joining a group
 
