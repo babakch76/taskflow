@@ -71,16 +71,33 @@ tip again; the branch is kept as a readable unit of the pass.
 board grammar, stepped creation, edit and delete, busy pass by swipe, first-run
 starters, appearance toggle. Three things the next session needs to know:
 
-1. **The screenshot deck is stale again.** It was shot before these six phases,
-   so it shows the old row grammar, the old create dialog and no appearance
-   toggle. `tools-build-screens-deck.js` rebuilds it, but the seeded household
-   has drifted through testing and wants re-seeding first.
+1. ~~**The screenshot deck is stale again.**~~ **Re-shot 2026-09-03.** Nine
+   slides now, 31 screens, all captured at 360dp against a running backend
+   after the six phases. The screenshots themselves are committed under
+   `screens/`, which they were not before, so the deck can be rebuilt by
+   someone who does not have the seeded database.
+
+   Re-seeding first was necessary: the old scratch database had drifted into
+   three groups with duplicate occurrences. Two things about the new seed are
+   worth copying if it is ever rebuilt again. The completions are **backdated**,
+   because seeding does them 0.13s apart and a weekly chore completed twice in
+   the same instant reads as a bug in the screenshot. And the **activity
+   feed's timestamps were moved to match** — before that, the history screen
+   said "Done Thu 27 Aug" while the feed said "1h" for the same event, which a
+   careful reader of the report would have caught.
 2. **Two things are parked on a decision**, both in BACKLOG: Undo on the pass
    snackbar (it needs an endpoint that does not exist) and B-14, whether an
    interval chore done early should pull its schedule earlier.
-3. **The app's copy and the research deck now differ** on the create flow's
-   first screen, at Babak's direction. The deck is still the stimulus that was
-   designed, so a session run against the app is testing the app's labels.
+3. **The app's copy and the research deck now differ** in two places, and
+   both are deliberate. The create flow's **first screen** was shortened at
+   Babak's direction. The **rotation line** was changed because the deck's
+   version, "Drag to change the order", instructed a gesture the picker has
+   never had: it reorders with up and down arrows, which TalkBack can reach and
+   a drag handle would not. It now reads "Everyone takes a turn, in this
+   order." A drag affordance is still open if anyone wants one (see BACKLOG).
+
+   The deck remains the stimulus that was *designed*, so a session run against
+   the app is testing the app's labels, not the deck's. Say so in the report.
 
 **4b was done** (2026-09-02). `TaskFlow_Screens.pptx` was rebuilt from
 screenshots of the real build — same filename, so the report's link still
@@ -107,6 +124,26 @@ in "Flat 3B", chores of all three schedule types, two completed cycles behind
 the bathroom, one overdue one-off, one done row, and sam away. It is gitignored
 and will not survive a `rm` of `task-manager-backend-GO/taskmanager.db` — the
 seeding script is in the scratchpad if it needs rebuilding.
+
+After the 3 September re-shoot it holds exactly one group, four chores, six
+occurrences, three tasks and fourteen activity events. If a later session finds
+more than that, it has drifted through testing again and should be re-seeded
+before any screenshot is trusted. The previous copy was moved to
+`.local-db-attic/` (gitignored) and a verified WAL-safe backup sits in
+`~/backups/local-taskmanager-*.db`, checked row-for-row across all ten tables.
+
+Two findings from the re-shoot that belong in the report rather than in a commit
+message:
+
+- **A busy pass writes no activity event.** Constraint 7 says the pass is
+  private; that holds at the data layer and not merely in the confirmation
+  dialog's wording. Verified by passing a real occurrence on the device and
+  finding `activity_events` unchanged.
+- **The starter screen's controls carry no content descriptions**, which reads
+  like an accessibility hole in a `uiautomator` dump and is not one. They are a
+  `Checkbox` and a `TextField`, which announce by role and state, and the one
+  bare `Icon` sits inside a button whose visible text is its label. Do not
+  "fix" this by adding descriptions that would then be announced twice.
 
 ### Done
 
@@ -207,6 +244,21 @@ happens when the board is read.
 
 3. ~~**Close the SSH rule again**~~ — done. It was open for the 1–2 September
    deploys and stopped answering on the afternoon of the 2nd.
+
+   **Update 2026-09-03: the box is not answering at all.** Port 22 *and* port
+   8080 both time out with no response, which is a stopped instance rather than
+   a closed security-group rule — a blocked port on a running instance behaves
+   the same way from outside, but 8080 was serving the client the day before
+   and nothing was changed in between. Starting it again is Babak's step; do
+   not go looking for console access.
+
+   **When it comes back, check the public IP before anything else.** A stopped
+   EC2 instance without an Elastic IP gets a new one on start, and that address
+   is baked into `taskflow.baseUrl` and inlined by the compiler into
+   `BuildConfig.BASE_URL` — so a new IP means editing `local.properties` **and**
+   a `clean`, and verifying the URL in Logcat's `okhttp` lines rather than in
+   the generated source. Section 6 has the rule; this is the case that triggers
+   it.
 
    **One consequence:** the live server is now three commits behind. B-15's
    history `ORDER BY` tiebreaker, the `schedule_type` and re-dating work in

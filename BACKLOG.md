@@ -320,6 +320,24 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
     except the screen the away person is actually looking at.
   - **The Board tab counts open rows** (B-11).
   Device-verified throughout; the details are in each commit message.
+- **The screens deck re-shot — DONE** (2026-09-03). Nine slides, 31 screens,
+  all captured at 360dp against a running backend after the six v2 UI phases;
+  the source screenshots are committed under `screens/` so the deck is
+  rebuildable without the seeded database. Re-seeded first, because the scratch
+  database had drifted into three groups with duplicate occurrences. The
+  seeded completions and the activity feed's timestamps are both **backdated**,
+  which matters: seeding completes a weekly chore twice 0.13s apart, and
+  unadjusted the history screen said "Done Thu 27 Aug" while the feed said "1h"
+  for the same event.
+
+- **The rotation line no longer instructs a gesture that isn't there — DONE**
+  (2026-09-03). The deck's copy read "Drag to change the order"; the picker has
+  only ever reordered with up and down arrows. It now reads "Everyone takes a
+  turn, in this order." **Open, if anyone wants it:** give the rotation picker a
+  real drag handle. The arrows are the more accessible control and TalkBack
+  reaches them, so this is a preference rather than a defect — but if drag is
+  added, the deck's original line becomes true again and should come back.
+
 - Multi-select and bulk status were removed with F1, and the backend endpoint
   behind them is **now gone too** — nothing had called it since, and the
   ViewModel wrapper was unreachable from any screen. The
