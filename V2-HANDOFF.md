@@ -66,7 +66,23 @@ the real build — is the only piece left, and it needs Babak at the emulator.**
 `ui-cleanup` was merged into `main` on 2 September and pushed, so `main` is the
 tip again; the branch is kept as a readable unit of the pass.
 
-**4b is done** (2026-09-02). `TaskFlow_Screens.pptx` was rebuilt from
+**The v2 UI pass is done** (2026-09-03) — all six phases of
+`taskflow_implement_v2_ui_prompt.md`, each device-verified before the next:
+board grammar, stepped creation, edit and delete, busy pass by swipe, first-run
+starters, appearance toggle. Three things the next session needs to know:
+
+1. **The screenshot deck is stale again.** It was shot before these six phases,
+   so it shows the old row grammar, the old create dialog and no appearance
+   toggle. `tools-build-screens-deck.js` rebuilds it, but the seeded household
+   has drifted through testing and wants re-seeding first.
+2. **Two things are parked on a decision**, both in BACKLOG: Undo on the pass
+   snackbar (it needs an endpoint that does not exist) and B-14, whether an
+   interval chore done early should pull its schedule earlier.
+3. **The app's copy and the research deck now differ** on the create flow's
+   first screen, at Babak's direction. The deck is still the stimulus that was
+   designed, so a session run against the app is testing the app's labels.
+
+**4b was done** (2026-09-02). `TaskFlow_Screens.pptx` was rebuilt from
 screenshots of the real build — same filename, so the report's link still
 resolves. Five slides, 16 screens, every one captured on the emulator against a
 running backend.
@@ -192,13 +208,17 @@ happens when the board is read.
 3. ~~**Close the SSH rule again**~~ — done. It was open for the 1–2 September
    deploys and stopped answering on the afternoon of the 2nd.
 
-   **One consequence:** the live server is a commit behind. B-15 — the chore
-   history `ORDER BY` tiebreaker — landed on `main` after SSH closed and was
-   never deployed. It is a query-ordering fix with no schema change and no
-   client dependency, so nothing is broken by the gap; the live history view
-   can just return two same-second completions in an arbitrary order. Take it
-   with the next deploy, whenever the rule is next open. Everything else on the
-   box matches `main`.
+   **One consequence:** the live server is now three commits behind. B-15's
+   history `ORDER BY` tiebreaker, the `schedule_type` and re-dating work in
+   `UpdateChore` (v2 UI phase 4), and the `covered_by` column (phase 2) all
+   landed on `main` after SSH closed.
+
+   Nothing is broken by the gap, but two of the three matter to the client:
+   without phase 4's change the live server rejects a schedule-type edit, and
+   without `covered_by` the board shows no return marker after a cover. **The
+   `covered_by` migration has been exercised against a populated database** —
+   the local scratch one, eight occurrences, nothing disturbed — so the deploy
+   should be as uneventful as the last. Take all three together.
 
 **There are backups now**, which there were not before. `~/backups` on the box
 holds a WAL-safe `sqlite3 .backup` of the database and a copy of the binary it
