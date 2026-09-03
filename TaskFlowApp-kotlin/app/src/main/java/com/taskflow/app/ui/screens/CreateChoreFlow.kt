@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -11,6 +12,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.HelpOutline
@@ -19,6 +21,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -528,12 +535,10 @@ private fun StepTwo(
     if (draft.rotating) {
         Text("Whose turn does it take?", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         Text(
-            // The deck's copy said "Drag to change the order", describing a
-            // gesture this picker does not have: it reorders with the arrows,
-            // which TalkBack can also reach. Instructing a gesture that is not
-            // there is worse than diverging from the deck, so the line now just
-            // states the rule and lets the arrows speak for themselves.
-            "Everyone takes a turn, in this order.",
+            // The deck's line again, now that the gesture exists. The arrows
+            // stay: drag is unreachable with TalkBack, so they are the
+            // accessible path to the same change rather than a leftover.
+            "Everyone takes a turn. Drag to change the order.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -776,54 +781,143 @@ private fun RotationPicker(
     val inOrder = rotation.filter { id -> members.any { it.id == id } }
     val rest = members.map { it.id }.filterNot { it in inOrder }
 
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        inOrder.forEachIndexed { index, id ->
-            val member = members.first { it.id == id }
-            Surface(
-                shape = MaterialTheme.shapes.medium,
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Row(
-                    modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+    val spacing = 6.dp
+    val spacingPx = with(LocalDensity.current) { spacing.roundToPx() }
+
+    // The gesture in flight. The order itself still lives in the draft, which
+    // stays the single source of truth: a drag does not hold its own copy of
+    // the list, it just rewrites the draft's as it crosses each neighbour.
+    var dragId by remember { mutableStateOf<String?>(null) }
+    var dragOffset by remember { mutableStateOf(0f) }
+
+    // Measured per row rather than assumed: the first row carries a "first
+    // turn" caption and an away member carries "away", so the rows are not all
+    // the same height and a fixed step would drift.
+    val heights = remember { mutableStateMapOf<String, Int>() }
+
+    // Every swap rewrites the list underneath the gesture that caused it, so
+    // the handler reads the latest through these instead of closing over the
+    // list and index it started with. Without this a drag would reorder once
+    // and then act on stale positions.
+    val latestOrder by rememberUpdatedState(inOrder)
+    val latestOnChange by rememberUpdatedState(onChange)
+
+    Column(verticalArrangement = Arrangement.spacedBy(spacing)) {
+        inOrder.forEach { id ->
+            // key() so Compose *moves* this row rather than rebuilding whatever
+            // now sits at its old position. Without it the reorder re-keys the
+            // pointerInput under the finger and the drag dies on first swap.
+            key(id) {
+                val index = inOrder.indexOf(id)
+                val member = members.first { it.id == id }
+                val dragging = dragId == id
+                Surface(
+                    shape = MaterialTheme.shapes.medium,
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shadowElevation = if (dragging) 6.dp else 0.dp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onSizeChanged { heights[id] = it.height }
+                        // Lifted above its neighbours so it reads as picked up
+                        // rather than sliding behind them.
+                        .zIndex(if (dragging) 1f else 0f)
+                        .graphicsLayer { translationY = if (dragging) dragOffset else 0f },
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(28.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primary),
-                        contentAlignment = Alignment.Center,
+                    Row(
+                        modifier = Modifier.padding(start = 2.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(
-                            text = member.username.take(1).uppercase(),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onPrimary,
-                        )
-                    }
-                    Spacer(Modifier.width(10.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(member.username, style = MaterialTheme.typography.bodyMedium)
-                        if (index == 0 || member.away) {
-                            Text(
-                                text = listOfNotNull(
-                                    "first turn".takeIf { index == 0 },
-                                    "away".takeIf { member.away },
-                                ).joinToString(" · "),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        Box(
+                            // 48dp, not the icon's 24: this is the one control
+                            // in the row that has to be grabbed accurately, and
+                            // a handle smaller than the minimum touch target is
+                            // a handle people miss. The icon inside stays its
+                            // own size.
+                            modifier = Modifier
+                                .size(48.dp)
+                                .pointerInput(id) {
+                                    detectDragGestures(
+                                        onDragStart = { dragId = id; dragOffset = 0f },
+                                        onDragEnd = { dragId = null; dragOffset = 0f },
+                                        onDragCancel = { dragId = null; dragOffset = 0f },
+                                    ) { change, drag ->
+                                        // Consumed so the enclosing scroll does
+                                        // not also claim the gesture.
+                                        change.consume()
+                                        dragOffset += drag.y
+                                        val order = latestOrder
+                                        val from = order.indexOf(id)
+                                        if (from < 0) return@detectDragGestures
+                                        // Swap once the finger has travelled
+                                        // half of the neighbour being passed,
+                                        // then subtract exactly the distance
+                                        // the row just jumped so the card stays
+                                        // under the finger.
+                                        if (dragOffset > 0f && from < order.lastIndex) {
+                                            val step = (heights[order[from + 1]] ?: 0) + spacingPx
+                                            if (step > 0 && dragOffset > step / 2f) {
+                                                latestOnChange(order.moved(from, from + 1))
+                                                dragOffset -= step
+                                            }
+                                        } else if (dragOffset < 0f && from > 0) {
+                                            val step = (heights[order[from - 1]] ?: 0) + spacingPx
+                                            if (step > 0 && dragOffset < -step / 2f) {
+                                                latestOnChange(order.moved(from, from - 1))
+                                                dragOffset += step
+                                            }
+                                        }
+                                    }
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.Default.DragHandle,
+                                // Deliberately unlabelled. Dragging is not
+                                // something TalkBack can perform, so announcing
+                                // a handle would offer a control that cannot be
+                                // used; the arrows beside it are the labelled
+                                // way to do the same thing.
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
+                        Box(
+                            modifier = Modifier
+                                .size(28.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primary),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = member.username.take(1).uppercase(),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onPrimary,
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(member.username, style = MaterialTheme.typography.bodyMedium)
+                            if (index == 0 || member.away) {
+                                Text(
+                                    text = listOfNotNull(
+                                        "first turn".takeIf { index == 0 },
+                                        "away".takeIf { member.away },
+                                    ).joinToString(" · "),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        IconButton(
+                            onClick = { onChange(inOrder.moved(index, index - 1)) },
+                            enabled = index > 0,
+                        ) { Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Move up") }
+                        IconButton(
+                            onClick = { onChange(inOrder.moved(index, index + 1)) },
+                            enabled = index < inOrder.lastIndex,
+                        ) { Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Move down") }
+                        TextButton(onClick = { onChange(inOrder.filterNot { it == id }) }) { Text("Remove") }
                     }
-                    IconButton(
-                        onClick = { onChange(inOrder.moved(index, index - 1)) },
-                        enabled = index > 0,
-                    ) { Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Move up") }
-                    IconButton(
-                        onClick = { onChange(inOrder.moved(index, index + 1)) },
-                        enabled = index < inOrder.lastIndex,
-                    ) { Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Move down") }
-                    TextButton(onClick = { onChange(inOrder.filterNot { it == id }) }) { Text("Remove") }
                 }
             }
         }

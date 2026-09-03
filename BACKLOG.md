@@ -330,13 +330,32 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
   unadjusted the history screen said "Done Thu 27 Aug" while the feed said "1h"
   for the same event.
 
-- **The rotation line no longer instructs a gesture that isn't there — DONE**
-  (2026-09-03). The deck's copy read "Drag to change the order"; the picker has
-  only ever reordered with up and down arrows. It now reads "Everyone takes a
-  turn, in this order." **Open, if anyone wants it:** give the rotation picker a
-  real drag handle. The arrows are the more accessible control and TalkBack
-  reaches them, so this is a preference rather than a defect — but if drag is
-  added, the deck's original line becomes true again and should come back.
+- **The rotation picker can be dragged — DONE** (2026-09-03, Babak's call).
+  The deck's copy had always read "Drag to change the order" and the picker had
+  only ever had up and down arrows. Rather than delete the promise, the gesture
+  now exists: a 48dp handle at the head of each row, and the line reads
+  "Everyone takes a turn. Drag to change the order."
+
+  **The arrows stay, deliberately.** Dragging is not something TalkBack can
+  perform, so they are the accessible route to the same change rather than a
+  leftover; for the same reason the handle's icon is unlabelled, so screen
+  readers are not offered a control they cannot work.
+
+  Two things in the implementation are load-bearing and should not be
+  "simplified":
+
+  - Each row is wrapped in `key(id)`. Without it a reorder re-keys the
+    `pointerInput` under the finger, because a plain `Column` identifies its
+    children by position, and the drag dies on the first swap.
+  - The gesture reads the order through `rememberUpdatedState` instead of
+    closing over the list it started with. Every swap rewrites that list, so a
+    captured copy would go stale and the second swap would act on stale
+    positions.
+
+  Row heights are measured rather than assumed, since the first row carries a
+  "first turn" caption and an away member carries "away", so a fixed step would
+  drift. Device-verified: one swap down, two swaps in a single continuous
+  gesture in both directions, and the arrows still working alongside.
 
 - Multi-select and bulk status were removed with F1, and the backend endpoint
   behind them is **now gone too** — nothing had called it since, and the
@@ -439,7 +458,7 @@ than a defect.
 
 ---
 
-### B-14 · Should an interval chore done early pull its schedule earlier? — OPEN, needs a decision
+### B-14 · Should an interval chore done early pull its schedule earlier? — DECIDED: no change
 
 **Raised** alongside B-13, from the same report. Not a bug against the spec, so
 it was left alone rather than changed quietly.
@@ -465,6 +484,22 @@ three days after it was meant to be — but a household that tidies up two days
 early every time will find "every 3 days" quietly drifting into every other
 day. Changing it means changing the spec's stated rule and the copy in the
 create dialog, so it needs Babak's call.
+
+**Answered 2026-09-03 (Babak): keep the current behaviour.** The next date stays
+`completion + N`, and nothing was changed.
+
+Three reasons worth having in the report, because a reader may well ask:
+
+- It is what `spec_2` line 43 says, and what the create screen tells the person
+  out loud: "Counted from when it was last done, not from the calendar."
+- The asymmetry with fixed-date chores is **meaningful rather than an
+  inconsistency**. Since B-13 a fixed-date chore done early holds its pattern,
+  because "Thursdays" is a promise about the calendar. "Every 3 days" is not:
+  it is a measurement from the work.
+- The known cost is a ratchet. Someone habitually a day early pulls the chore
+  permanently earlier, so an every-3-days chore can drift towards every-2-days.
+  Accepted, not overlooked: the household can edit the interval, and a chore
+  being done sooner than required is not the failure mode this app is for.
 
 ---
 

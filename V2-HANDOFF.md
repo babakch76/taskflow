@@ -85,19 +85,27 @@ starters, appearance toggle. Three things the next session needs to know:
    feed's timestamps were moved to match** — before that, the history screen
    said "Done Thu 27 Aug" while the feed said "1h" for the same event, which a
    careful reader of the report would have caught.
-2. **Two things are parked on a decision**, both in BACKLOG: Undo on the pass
-   snackbar (it needs an endpoint that does not exist) and B-14, whether an
-   interval chore done early should pull its schedule earlier.
-3. **The app's copy and the research deck now differ** in two places, and
-   both are deliberate. The create flow's **first screen** was shortened at
-   Babak's direction. The **rotation line** was changed because the deck's
-   version, "Drag to change the order", instructed a gesture the picker has
-   never had: it reorders with up and down arrows, which TalkBack can reach and
-   a drag handle would not. It now reads "Everyone takes a turn, in this
-   order." A drag affordance is still open if anyone wants one (see BACKLOG).
+2. **One thing is still parked on a decision:** Undo on the pass snackbar. It
+   needs an endpoint that does not exist (`DELETE /occurrences/{id}/pass`), and
+   there is a catch worth knowing before building it — the receiver's "your
+   turn" reminder is scheduled *on their device*, so an undo cannot recall a
+   notification that has already fired. The confirm dialog is the safety net
+   for now.
 
-   The deck remains the stimulus that was *designed*, so a session run against
-   the app is testing the app's labels, not the deck's. Say so in the report.
+   **B-14 is closed** (2026-09-03): an interval chore done early keeps pulling
+   its schedule earlier, unchanged, and BACKLOG records the three reasons. The
+   **em-dash sweep of code comments** was also declined — user-facing strings
+   are clean and the comments stay as they are.
+3. **The app's copy and the research deck differ in one place**: the create
+   flow's **first screen**, shortened at Babak's direction. Say so in the
+   report — the deck is the stimulus that was *designed*, so a session run
+   against the app is testing the app's labels there, not the deck's.
+
+   The rotation line no longer diverges. It briefly did: the deck promised
+   "Drag to change the order" and the picker only had arrows, so the line was
+   cut back to match the app. Babak's call was to build the gesture instead, so
+   the deck's wording is back and now true (see BACKLOG for the two parts of
+   the implementation that must not be simplified away).
 
 **4b was done** (2026-09-02). `TaskFlow_Screens.pptx` was rebuilt from
 screenshots of the real build — same filename, so the report's link still
