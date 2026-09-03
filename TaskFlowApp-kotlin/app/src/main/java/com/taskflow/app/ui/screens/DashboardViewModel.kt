@@ -7,6 +7,7 @@ import com.taskflow.app.data.model.Group
 import com.taskflow.app.data.model.InviteActionRequest
 import com.taskflow.app.data.model.InviteInfo
 import com.taskflow.app.data.model.Occurrence
+import com.taskflow.app.data.model.CreateChoreRequest
 import com.taskflow.app.data.model.RedeemInviteRequest
 import com.taskflow.app.data.model.UpdateMeRequest
 import com.taskflow.app.data.remote.ApiErrors
@@ -206,6 +207,55 @@ class DashboardViewModel : ViewModel() {
             }
             .awaitAll()
             .filterNotNull()
+    }
+
+    /**
+     * Creates the starter chores a new household picked, in the order shown.
+     *
+     * Sequential rather than parallel, and deliberately. The board sorts by
+     * status and due date rather than by creation, so this is not about the
+     * order rows appear in; it is about a partial failure being legible.
+     * Five requests in flight at once can fail in the middle in five ways,
+     * and the household is left guessing which of its chores exist.
+     *
+     * Stops at the first failure and reports it, rather than leaving a
+     * half-built board with no explanation.
+     */
+    fun addStarterChores(
+        groupId: String,
+        myUserId: String?,
+        starters: List<StarterChore>,
+        onResult: (String?) -> Unit,
+    ) {
+        viewModelScope.launch {
+            _isWorking.value = true
+            try {
+                val rotation = listOfNotNull(myUserId)
+                for (starter in starters) {
+                    val response = api.createChore(
+                        groupId,
+                        CreateChoreRequest(
+                            name = starter.name.trim(),
+                            scheduleType = starter.kind.scheduleType,
+                            intervalDays = starter.intervalDays
+                                .takeIf { starter.kind == ChoreKind.INTERVAL },
+                            fixedWeekdays = listOf(starter.weekday)
+                                .takeIf { starter.kind == ChoreKind.FIXED_DATE },
+                            rotation = rotation,
+                        ),
+                    )
+                    if (!response.isSuccessful) {
+                        onResult(ApiErrors.messageFor(response))
+                        return@launch
+                    }
+                }
+                onResult(null)
+            } catch (e: Exception) {
+                onResult(networkMessage(e))
+            } finally {
+                _isWorking.value = false
+            }
+        }
     }
 
     /**

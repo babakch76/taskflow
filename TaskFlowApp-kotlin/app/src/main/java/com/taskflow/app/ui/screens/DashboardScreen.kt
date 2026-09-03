@@ -78,6 +78,9 @@ fun DashboardScreen(
     var showInvites by remember { mutableStateOf(false) }
     var showJoinByCode by remember { mutableStateOf(false) }
     var showQuietHours by remember { mutableStateOf(false) }
+    // The group a first-run starter list is being offered for, if any.
+    var starterFor by remember { mutableStateOf<Group?>(null) }
+    var starterError by remember { mutableStateOf<String?>(null) }
     var showMenu by remember { mutableStateOf(false) }
 
     val snackbarHostState = remember { SnackbarHostState() }
@@ -251,9 +254,37 @@ fun DashboardScreen(
     if (showCreateDialog) {
         CreateGroupDialog(
             onDismiss = { showCreateDialog = false },
-            onGroupCreated = {
+            onGroupCreated = { group ->
                 showCreateDialog = false
                 viewModel.refresh()
+                // Straight into the offer. A new household is at its most
+                // willing to agree things in the minute after it is created,
+                // and an empty board is the worst thing to hand it.
+                starterFor = group
+            },
+        )
+    }
+
+    starterFor?.let { group ->
+        FirstRunStarters(
+            groupName = group.name,
+            working = isWorking,
+            error = starterError,
+            onSkip = {
+                starterFor = null
+                starterError = null
+                onGroupClick(group.id)
+            },
+            onAdd = { chosen ->
+                starterError = null
+                viewModel.addStarterChores(group.id, myUserId, chosen) { failure ->
+                    if (failure == null) {
+                        starterFor = null
+                        onGroupClick(group.id)
+                    } else {
+                        starterError = failure
+                    }
+                }
             },
         )
     }
@@ -649,7 +680,7 @@ private fun JoinWithCodeDialog(
 @Composable
 private fun CreateGroupDialog(
     onDismiss: () -> Unit,
-    onGroupCreated: () -> Unit,
+    onGroupCreated: (Group) -> Unit,
 ) {
     var name by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
@@ -701,8 +732,9 @@ private fun CreateGroupDialog(
                             val response = RetrofitClient.getInstance()
                                 .groupApi
                                 .createGroup(CreateGroupRequest(name.trim(), description.trim()))
-                            if (response.isSuccessful) {
-                                onGroupCreated()
+                            val created = response.body()
+                            if (response.isSuccessful && created != null) {
+                                onGroupCreated(created)
                             } else {
                                 // Same treatment as the auth screens: show the
                                 // backend's message, not the raw JSON body.

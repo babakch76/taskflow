@@ -246,6 +246,30 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
   future-date variant; the pass created no group activity entry (constraint 7);
   both markers appear on the right rows.
 
+- **v2 UI phase 5 (first run) — DONE** (2026-09-03). A new group lands on an
+  offer instead of an empty board, closing the spec's onboarding loop: create or
+  join, add three to five chores, land on the board.
+  - The deck's five starters, each showing the wording it will have (Trash / as
+    needed, Bathroom / every 4 days, Kitchen floor / weekly, Recycling /
+    Tuesdays, Hallway vacuum / fortnightly). That teaches the schedule kinds by
+    example before anyone meets the create flow, which is the second job the
+    list does.
+  - Rows are keep-or-remove **and renameable**: "Trash" is what one household
+    calls it and "Bins" is what the next one does, and being able to say so is
+    the difference between a list you accept and one you agree. "Something
+    else" adds a blank row rather than opening the create flow, which would
+    lose the rest of the choices on the way out and back.
+  - **Skip** is always there. Each kept starter becomes an ordinary chore,
+    editable through phase 4 like any other.
+  - Creation is sequential so a partial failure is legible — five requests in
+    flight can fail in five ways and leave the household guessing which chores
+    exist. (An earlier comment claimed it preserved board order; it does not,
+    since the board sorts by status and due date. Corrected rather than left.)
+  Device-verified: new group "Lake House" → five offered → three removed, one
+  renamed Trash to Bins → "Add 2 chores" → board shows exactly Bathroom (every
+  4 days, dated) and Bins (as needed, "Your turn"), nothing else. Skip on a
+  second new group added nothing and landed on the empty board.
+
 - **The board is the screen — DONE** (2026-09-02, UI cleanup phase 3), in four
   commits:
   - **Calendar tab deleted.** It read `state.tasks` only, so it showed the
