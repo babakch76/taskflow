@@ -498,6 +498,10 @@ fun GroupDetailScreen(
                 detailOccurrenceId = null
                 passCandidate = occurrence
             },
+            onPickDay = { picked ->
+                detailOccurrenceId = null
+                viewModel.setOccurrenceDueDate(occurrence.id, picked)
+            },
             onEditChore = {
                 // Close the sheet first: an AlertDialog over a bottom sheet
                 // stacks two surfaces and the sheet's scrim fights the dialog's.
@@ -1034,6 +1038,7 @@ private fun TaskList(
                     assigneeName = members.firstOrNull { it.id == row.assignedTo }?.username,
                     doneByName = members.firstOrNull { it.id == row.doneBy }?.username,
                     coveredByName = (row as? BoardRow.OccurrenceRow)?.occurrence?.coveredByName,
+                    needsDate = (row as? BoardRow.OccurrenceRow)?.occurrence?.needsDate == true,
                     // Whether there is anybody to pass to at all. A rotation of
                     // one, or a household where everyone else is away, has
                     // nowhere to send it, and offering the gesture there would
@@ -1130,13 +1135,21 @@ private fun cycleLineFor(
     val due = row.dueDate?.takeUnless { dateAlreadyShown }?.let { formatDueDate(it) }
     val mine = row.assignedTo != null && row.assignedTo == myUserId
     val who = assigneeName ?: "Unassigned"
+
+    // A one-off has no rotation, so it has no *turns*: it was given to one
+    // person once and stays with them. Saying "your turn" about it borrows a
+    // word that means something precise everywhere else on this board, and
+    // means nothing here. The name alone does the job, and for your own rows
+    // the section heading has already said it.
+    val oneOff = row is BoardRow.TaskRow
+
     return when {
         mine && due != null -> "Due $due"
-        mine -> "Your turn"
+        mine -> if (oneOff) "" else "Your turn"
         due != null -> "$who · due $due"
         // Somebody else's standing turn. Possessive rather than "Maya - turn",
         // which reads as a label instead of a sentence.
-        assigneeName != null -> "$who's turn"
+        assigneeName != null -> if (oneOff) who else "$who's turn"
         else -> who
     }
 }
@@ -1161,6 +1174,7 @@ private fun TaskCard(
     assigneeName: String?,
     doneByName: String?,
     coveredByName: String?,
+    needsDate: Boolean,
     passedByMe: Boolean,
     canPass: Boolean,
     myUserId: String?,
@@ -1318,14 +1332,16 @@ private fun TaskCard(
                                 .background(overdueColor()),
                         )
                     }
-                    Text(
-                        text = cycleText,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (overdue && !dateIsOnScheduleLine) overdueColor()
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    if (cycleText.isNotEmpty()) {
+                        Text(
+                            text = cycleText,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (overdue && !dateIsOnScheduleLine) overdueColor()
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
 
                 // The debt rule, said out loud on the two rows it applies to.
@@ -1336,6 +1352,19 @@ private fun TaskCard(
                 val returned = coveredByName != null && row.isOpen
                 val mine = row.assignedTo != null && row.assignedTo == myUserId
                 val marker = when {
+                    // Said before the debt marker, because it is the more
+                    // surprising of the two: this chore has come back to you
+                    // without anybody doing it.
+                    //
+                    // It states the fact and stops there. "Pick a day" belongs
+                    // on the row only until a day is picked, and the row cannot
+                    // tell: the flag is derived from who has passed, which does
+                    // not change when a date is set. A line that keeps asking
+                    // for something already done is worse than one that simply
+                    // says where things stand, and the detail sheet carries the
+                    // button and the explanation.
+                    needsDate && mine -> "Everyone's busy, so it's back with you."
+
                     passedByMe -> "Next turn comes back to you. " +
                         "${assigneeName ?: "Someone"} is covering this one"
 
@@ -1465,7 +1494,9 @@ private fun OccurrenceDetailSheet(
     onEditChore: () -> Unit,
     onShowHistory: () -> Unit,
     onPass: () -> Unit,
+    onPickDay: (String) -> Unit,
 ) {
+    var pickingDay by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val assignee = members.firstOrNull { it.id == occurrence.assignedTo }?.username
     val doer = members.firstOrNull { it.id == occurrence.doneBy }?.username
@@ -1544,7 +1575,13 @@ private fun OccurrenceDetailSheet(
             // A passed chore says where it came from, so the receiver knows why
             // it is on their row and the passer can see it landed. Neutral
             // wording: passing is a normal move, not something to answer for.
-            if (occurrence.isOpen && passer != null) {
+            // Not while it is back in the passer's own hands. Once a whole
+            // household has passed a chore it returns to whoever asked first,
+            // and telling them it "comes back to you next time" describes a
+            // future that has already happened; the Pick a day block below
+            // says what is actually true.
+            val stillAway = occurrence.assignedTo != occurrence.passedFrom
+            if (occurrence.isOpen && passer != null && stillAway) {
                 Text(
                     if (occurrence.passedFrom == myUserId) {
                         "You passed this on. It comes back to you next time."
@@ -1576,7 +1613,23 @@ private fun OccurrenceDetailSheet(
             // "Busy — pass it": only on an open occurrence that is actually
             // yours. Passing somebody else's turn would be handing out work,
             // and the server refuses it anyway.
-            if (occurrence.isOpen && occurrence.assignedTo == myUserId) {
+            if (occurrence.needsDate && occurrence.assignedTo == myUserId) {
+                HorizontalDivider()
+                Button(onClick = { pickingDay = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Pick a day")
+                }
+                Text(
+                    "Everyone was busy, so it came back to you. It's already set for " +
+                        "the latest the schedule allows, and you can bring it forward.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            // Passing is offered on your own open turn, but not once the round
+            // has closed: there is nobody left to hand it to, and the button
+            // would only earn a refusal.
+            if (occurrence.isOpen && occurrence.assignedTo == myUserId && !occurrence.needsDate) {
                 HorizontalDivider()
                 OutlinedButton(onClick = onPass, modifier = Modifier.fillMaxWidth()) {
                     Text("Busy? Pass it on")
@@ -1589,6 +1642,17 @@ private fun OccurrenceDetailSheet(
                 )
             }
         }
+    }
+
+    if (pickingDay) {
+        DueDatePickerDialog(
+            initial = occurrence.dueDate,
+            onDismiss = { pickingDay = false },
+            onPicked = { picked ->
+                pickingDay = false
+                onPickDay(picked)
+            },
+        )
     }
 }
 

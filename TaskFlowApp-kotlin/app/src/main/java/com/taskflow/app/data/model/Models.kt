@@ -206,6 +206,15 @@ data class Occurrence(
      * board says the second one out loud rather than leaving it to be inferred
      * from a turn that appears not to have moved.
      */
+    /**
+     * Set when everybody who could take this chore has passed it, so it has
+     * come back to you and you are the one to say when it will happen.
+     *
+     * Only ever sent on your own rows: that a whole household declined a chore
+     * is between them and whoever is now holding it.
+     */
+    @SerializedName("needs_date")
+    val needsDate: Boolean = false,
     @SerializedName("covered_by")
     val coveredBy: String? = null,
     @SerializedName("covered_by_name")

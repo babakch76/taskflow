@@ -228,6 +228,24 @@ interface GroupApiService {
         @Path("occurrence_id") occurrenceId: String,
     ): Response<Occurrence>
 
+    /**
+     * Bring an occurrence's day forward.
+     *
+     * The one place a chore's own date moves by hand, and only earlier. It is
+     * for the case where everybody was busy at once: the chore came back to
+     * whoever asked first, dated as late as the chore's own rhythm allows, and
+     * they are choosing the day it will actually happen.
+     *
+     * Refused with 403 unless you are holding it, and 400 if the date is later
+     * than the one it already has.
+     */
+    @PUT("groups/{group_id}/occurrences/{occurrence_id}/due-date")
+    suspend fun setOccurrenceDueDate(
+        @Path("group_id") groupId: String,
+        @Path("occurrence_id") occurrenceId: String,
+        @Body request: Map<String, String>,
+    ): Response<Occurrence>
+
     /** Declare yourself away from this household, or back (F5). */
     @PUT("groups/{group_id}/members/me/away")
     suspend fun setAway(

@@ -502,6 +502,19 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
     }
 
     /**
+     * Pick the day a chore nobody could take will happen.
+     *
+     * Only ever earlier than the date it arrived with; the server enforces
+     * that, and its refusal is what the person sees rather than a generic
+     * failure.
+     */
+    fun setOccurrenceDueDate(occurrenceId: String, dueDate: String) {
+        runAction(successMessage = "Day set.") {
+            api.setOccurrenceDueDate(groupId, occurrenceId, mapOf("due_date" to dueDate))
+        }
+    }
+
+    /**
      * Take back the pass the snackbar is offering to undo.
      *
      * For the swipe that caught the wrong row. The server decides whether it is

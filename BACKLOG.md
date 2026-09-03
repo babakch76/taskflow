@@ -320,6 +320,54 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
     except the screen the away person is actually looking at.
   - **The Board tab counts open rows** (B-11).
   Device-verified throughout; the details are in each commit message.
+- **When the whole household is busy — DONE** (2026-09-03, Babak's rule, added
+  mid-pass). Circulating passes were allowed (2.2), which left a chore able to
+  lap the household forever. Babak's answer, and it is a better one than
+  blocking the pass: when everybody available has passed it, **the chore
+  returns to whoever asked first and they pick the day**, no later than the
+  chore's own next date.
+
+  How it lands:
+
+  - `everyoneHasPassed` counts only *available* members, so a household of
+    three with one away is a household of two for this purpose.
+  - The closing pass still counts. Whoever passes last owes a turn like
+    everybody else; they do not escape by being last.
+  - The chore comes back dated to the chore's **next scheduled date**, which is
+    both the sensible default and the bound. `PUT .../occurrences/{id}/due-date`
+    brings it forward and refuses to push it back, because otherwise "we were
+    all busy" becomes a way to postpone a chore a round at a time. If nobody
+    picks, that date stands and the chore stands with it, which is what Babak
+    chose.
+  - Asking again once the round has closed is refused with what to do instead,
+    rather than silently lapping: *"everyone has passed this one, so there is
+    nobody to hand it to. Pick a day for it instead."*
+  - An as-needed chore has no next date, so nothing to default to and nothing
+    to bound. It comes back and waits.
+  - `needs_date` is computed per request and sent **only on the holder's own
+    rows**: that a whole household declined a chore is between them and the
+    person now holding it.
+
+  Three copy problems the device found, none of which the tests would have:
+
+  - The board first said "Everyone's busy, so it's back with you. Pick a day."
+    and kept saying it after a day was picked, because the flag derives from
+    who has passed and that does not change when a date is set. The board now
+    states the fact and the detail sheet carries the action.
+  - The sheet still showed "You passed this on. It comes back to you next
+    time" while the chore was already back in the passer's hands. Suppressed
+    when the holder is the passer.
+  - "Busy? Pass it on" was still offered after the round closed, where it could
+    only earn a refusal. Hidden.
+
+- **"Your turn" no longer appears on one-offs — DONE** (2026-09-03, Babak's
+  correction). A one-off has no rotation, so it has no turns: it was given to
+  one person once and stays with them. "Your turn" borrowed a word that means
+  something precise everywhere else on the board and nothing here. Your own
+  one-offs now show no third line at all, since the YOURS heading has already
+  said it; somebody else's show the bare name. Rotation chores keep "your
+  turn" and "sam's turn", which are true.
+
 - **The turn rule, verified case by case — DONE** (2026-09-03), against
   `turn_rule_cases_prompt.md`. Thirteen cases now live in
   `internal/handlers/turn_rule_test.go`, each asserting a whole *sequence* of

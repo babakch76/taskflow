@@ -595,6 +595,12 @@ func (h *ChoreHandler) ListOccurrences(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Tell the holder, and only the holder, when a chore has come back to them
+	// because everybody available had passed it. Two extra reads on a board
+	// load, which is the price of not storing a fact that the chain can change
+	// out from under.
+	markChoresNeedingADate(h, groupID, middleware.GetUserID(r), occurrences)
+
 	jsonResponse(w, http.StatusOK, occurrences)
 }
 
@@ -863,6 +869,30 @@ func (h *ChoreHandler) PassOccurrence(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	// The round closed already: it is back with whoever asked first and there is
+	// nobody who has not declined it. Asking again would lap the household, so
+	// say what is left to do instead of quietly doing nothing.
+	if everyoneHasPassed(chore.Rotation, current.PassedChain, away) {
+		jsonError(w,
+			"everyone has passed this one, so there is nobody to hand it to. Pick a day for it instead.",
+			http.StatusConflict)
+		return
+	}
+
+	chain := appendOnce(current.PassedChain, userID)
+
+	// Everyone available has now passed it, so there is nobody to hand it to
+	// and circling it again would only lap the household. It goes back to
+	// whoever asked first, with the date it would next have come round on
+	// anyway, and they are the one to bring that forward.
+	//
+	// Their pass still counts: they were holding the chore when they passed
+	// it, so they still owe a turn, exactly like everybody else in the chain.
+	if everyoneHasPassed(chore.Rotation, chain, away) {
+		h.closeTheRound(w, chore, current, chain)
+		return
+	}
+
 	receiver := nextCoverer(chore.Rotation, current, userID, away)
 	if receiver == current.AssignedTo || receiver == userID {
 		// Either a rotation of one, or everyone else is away. Both mean there
@@ -885,8 +915,8 @@ func (h *ChoreHandler) PassOccurrence(w http.ResponseWriter, r *http.Request) {
 
 	// Every passer owes a turn, and they are repaid in the order they passed.
 	//
-	// This used to keep only the first passer, on the reasoning that passing
-	// something on declines a favour rather than a duty. The turn-rule
+	// The chain used to keep only the first passer, on the reasoning that
+	// passing something on declines a favour rather than a duty. The turn-rule
 	// document overrides that: B was holding the chore when B passed it, so B
 	// skipped too, and owes one back.
 	//
@@ -894,7 +924,6 @@ func (h *ChoreHandler) PassOccurrence(w http.ResponseWriter, r *http.Request) {
 	// it has come round to them, and that is allowed, but it does not buy them
 	// a second debt. Recording every pass event would also be a skip counter,
 	// which Part 0 forbids outright.
-	chain := appendOnce(current.PassedChain, userID)
 	passedFrom := &chain[0]
 
 	// due_before_pass remembers the date this pass is about to overwrite, so
@@ -914,6 +943,119 @@ func (h *ChoreHandler) PassOccurrence(w http.ResponseWriter, r *http.Request) {
 		current.DueDate, occurrenceID,
 	); err != nil {
 		log.Printf("PassOccurrence: update failed for %s: %v", occurrenceID, err)
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	updated, err := h.loadOccurrence(occurrenceID)
+	if err != nil {
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	jsonResponse(w, http.StatusOK, updated)
+}
+
+// closeTheRound hands a chore nobody can take back to whoever asked first.
+//
+// The date it carries is the one the chore would next have come round on, which
+// is both a sensible default and the latest the household should wait: a busy
+// round must not push a chore past its own rhythm. SetOccurrenceDueDate lets
+// the holder bring it forward, and if nobody does, this date stands and the
+// chore stands with it.
+//
+// An as-needed chore has no next date, so there is nothing to default to and
+// nothing to bound. It simply comes back and waits, which is what an as-needed
+// chore does anyway.
+func (h *ChoreHandler) closeTheRound(
+	w http.ResponseWriter,
+	chore *models.Chore,
+	current *models.Occurrence,
+	chain []string,
+) {
+	first := chain[0]
+	dueDate := current.DueDate
+	if bound := nextDueDate(chore, current, time.Now()); bound != nil {
+		dueDate = bound
+	}
+
+	if _, err := h.DB.Exec(
+		`UPDATE occurrences
+		 SET assigned_to = ?, due_date = ?, passed_from = ?, passed_at = ?,
+		     passed_chain = ?, due_before_pass = COALESCE(due_before_pass, ?)
+		 WHERE id = ?`,
+		first, dueDate, first, time.Now().UTC(), encodeIDs(chain),
+		current.DueDate, current.ID,
+	); err != nil {
+		log.Printf("closeTheRound: update failed for %s: %v", current.ID, err)
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	updated, err := h.loadOccurrence(current.ID)
+	if err != nil {
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	// Not flagged here. The person who has to act is the one it landed on, and
+	// that is never the person who just passed it: whoever closes a round is
+	// by definition not the one who opened it. They see it on their board,
+	// where ListOccurrences sets the flag for its own reader.
+	jsonResponse(w, http.StatusOK, updated)
+}
+
+// SetOccurrenceDueDate handles PUT /groups/{group_id}/occurrences/{occurrence_id}/due-date
+//
+// The one place a chore's own date can be moved by hand, and only in one
+// direction: earlier. It exists for the case where a whole household was busy
+// at once, the chore came back to whoever asked first, and they are picking the
+// day it will actually happen.
+//
+// Bounded by the date the occurrence already carries, which closeTheRound set
+// to the chore's next scheduled date. Letting it move later would turn "we were
+// all busy" into a way to postpone a chore indefinitely, one round at a time.
+func (h *ChoreHandler) SetOccurrenceDueDate(w http.ResponseWriter, r *http.Request) {
+	groupID := r.PathValue("group_id")
+	occurrenceID := r.PathValue("occurrence_id")
+	userID := middleware.GetUserID(r)
+
+	var req struct {
+		DueDate *time.Time `json:"due_date"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.DueDate == nil {
+		jsonError(w, "due_date is required", http.StatusBadRequest)
+		return
+	}
+
+	current, err := h.loadOccurrence(occurrenceID)
+	if err == sql.ErrNoRows || (current != nil && current.GroupID != groupID) {
+		jsonError(w, "occurrence not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		jsonError(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if current.Status != models.OccurrenceOpen {
+		jsonError(w, "only an open occurrence has a date to set", http.StatusConflict)
+		return
+	}
+	if current.AssignedTo != userID {
+		jsonError(w, "only the person holding it can set the day", http.StatusForbidden)
+		return
+	}
+	if current.DueDate == nil {
+		jsonError(w, "this chore has no schedule to bring forward", http.StatusConflict)
+		return
+	}
+	if req.DueDate.After(*current.DueDate) {
+		jsonError(w, "the day can be brought forward but not put back", http.StatusBadRequest)
+		return
+	}
+
+	if _, err := h.DB.Exec(
+		`UPDATE occurrences SET due_date = ? WHERE id = ?`, req.DueDate.UTC(), occurrenceID,
+	); err != nil {
+		log.Printf("SetOccurrenceDueDate: update failed for %s: %v", occurrenceID, err)
 		jsonError(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -1215,6 +1357,68 @@ func nextTurn(
 	}
 
 	return nextInRotation(rotation, resumeFrom(rotation, resume, owed), away), nil, nil, nil
+}
+
+// everyoneHasPassed reports whether there is nobody left to hand a chore to.
+//
+// True when every member of the rotation who is actually available has already
+// passed this occurrence. Away members are not counted: they are out of the
+// rotation entirely, so a household of three with one away is a household of
+// two for this purpose.
+//
+// A rotation of one is never "everyone busy": there was never anybody to pass
+// to, which is a different refusal and already has its own message.
+func everyoneHasPassed(rotation []string, chain []string, away map[string]bool) bool {
+	available := 0
+	for _, id := range rotation {
+		if away[id] {
+			continue
+		}
+		available++
+		if !contains(chain, id) {
+			return false
+		}
+	}
+	return available > 1
+}
+
+// markChoresNeedingADate sets NeedsDate on the caller's own open rows where
+// everybody available has already passed the chore.
+//
+// Failures are silent: this decorates a board that has already loaded, and an
+// error here should cost a hint rather than the whole screen.
+func markChoresNeedingADate(h *ChoreHandler, groupID, userID string, occurrences []models.Occurrence) {
+	if userID == "" {
+		return
+	}
+	choreIDs := []string{}
+	for i := range occurrences {
+		o := &occurrences[i]
+		if o.Status == models.OccurrenceOpen && o.AssignedTo == userID && len(o.PassedChain) > 0 {
+			choreIDs = append(choreIDs, o.ChoreID)
+		}
+	}
+	if len(choreIDs) == 0 {
+		return
+	}
+
+	away, err := h.awayMembers(groupID)
+	if err != nil {
+		return
+	}
+	rotations, err := h.loadRotations(choreIDs)
+	if err != nil {
+		return
+	}
+	for i := range occurrences {
+		o := &occurrences[i]
+		if o.Status != models.OccurrenceOpen || o.AssignedTo != userID {
+			continue
+		}
+		if everyoneHasPassed(rotations[o.ChoreID], o.PassedChain, away) {
+			o.NeedsDate = true
+		}
+	}
 }
 
 // nextCoverer picks who a busy pass hands the chore to.

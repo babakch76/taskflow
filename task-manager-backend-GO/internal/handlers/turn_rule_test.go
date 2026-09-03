@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"task-manager-backend/internal/database"
 	"task-manager-backend/internal/models"
@@ -591,5 +592,140 @@ func TestTurnRule_PreChainRowsStillOweTheirDebt(t *testing.T) {
 	}
 	if next.CoveredBy == nil || *next.CoveredBy != b {
 		t.Errorf("covered_by is %v, want B, who did it", next.CoveredBy)
+	}
+}
+
+// ── When the whole household is busy ─────────────────────────────────────
+
+func setDueDate(t *testing.T, db *database.DB, groupID, occID, actor, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	h := &ChoreHandler{DB: db}
+	rec := httptest.NewRecorder()
+	h.SetOccurrenceDueDate(rec, request("PUT",
+		"/groups/"+groupID+"/occurrences/"+occID+"/due-date", body, actor,
+		map[string]string{"group_id": groupID, "occurrence_id": occID}))
+	return rec
+}
+
+// Everybody passes, so there is nobody left to pass to. The chore returns to
+// whoever asked first, carrying the date it would next have come round on.
+func TestAllBusyReturnsTheChoreToTheFirstPasser(t *testing.T) {
+	db, g, a, b, c, chore, name := threePersonChore(t, "interval")
+
+	occ := theOpenOcc(t, db, g, a, chore.ID)
+	before := occ.DueDate
+	if before == nil {
+		t.Fatal("the first occurrence has no due date to bound against")
+	}
+
+	passOK(t, db, g, occ.ID, a)
+	passOK(t, db, g, theOpenOcc(t, db, g, a, chore.ID).ID, b)
+	passOK(t, db, g, theOpenOcc(t, db, g, a, chore.ID).ID, c)
+
+	back := theOpenOcc(t, db, g, a, chore.ID)
+	if back.AssignedTo != a {
+		t.Errorf("it went to %s, want A: with everybody busy it returns to whoever asked first",
+			name(back.AssignedTo))
+	}
+	// Every passer still owes a turn, A included.
+	if got := chainOf(t, db, back.ID); got != a+","+b+","+c {
+		t.Errorf("chain is %q, want all three: passing last does not excuse you", got)
+	}
+	// And it is dated no later than the chore's own rhythm.
+	if back.DueDate == nil {
+		t.Fatal("it came back with no date at all")
+	}
+	if back.DueDate.Before(*before) {
+		t.Errorf("the new date %s is before the old %s", back.DueDate, before)
+	}
+}
+
+// There is nobody to hand it to, so asking again is refused rather than
+// silently lapping the household.
+func TestAllBusyRefusesAFurtherPass(t *testing.T) {
+	db, g, a, b, c, chore, _ := threePersonChore(t, "interval")
+
+	passOK(t, db, g, theOpenOcc(t, db, g, a, chore.ID).ID, a)
+	passOK(t, db, g, theOpenOcc(t, db, g, a, chore.ID).ID, b)
+	passOK(t, db, g, theOpenOcc(t, db, g, a, chore.ID).ID, c)
+
+	back := theOpenOcc(t, db, g, a, chore.ID)
+	rec := passOccurrence(t, db, g, back.ID, a)
+	if rec.Code != 409 {
+		t.Errorf("passing again returned %d, want 409: there is nobody left", rec.Code)
+	}
+}
+
+// The holder may bring the day forward, and only forward. Letting it move later
+// would make "we were all busy" a way to postpone a chore a round at a time.
+func TestAllBusyLetsTheHolderBringTheDayForwardOnly(t *testing.T) {
+	db, g, a, b, c, chore, _ := threePersonChore(t, "interval")
+
+	passOK(t, db, g, theOpenOcc(t, db, g, a, chore.ID).ID, a)
+	passOK(t, db, g, theOpenOcc(t, db, g, a, chore.ID).ID, b)
+	passOK(t, db, g, theOpenOcc(t, db, g, a, chore.ID).ID, c)
+	back := theOpenOcc(t, db, g, a, chore.ID)
+	bound := *back.DueDate
+
+	earlier := bound.AddDate(0, 0, -1).Format(time.RFC3339)
+	if rec := setDueDate(t, db, g, back.ID, a, `{"due_date":"`+earlier+`"}`); rec.Code != 200 {
+		t.Fatalf("bringing it forward: %d %s", rec.Code, rec.Body.String())
+	}
+	moved := theOpenOcc(t, db, g, a, chore.ID)
+	if !moved.DueDate.Before(bound) {
+		t.Errorf("the date is %s, want earlier than %s", moved.DueDate, bound)
+	}
+
+	later := bound.AddDate(0, 0, 3).Format(time.RFC3339)
+	if rec := setDueDate(t, db, g, back.ID, a, `{"due_date":"`+later+`"}`); rec.Code != 400 {
+		t.Errorf("pushing it back returned %d, want 400", rec.Code)
+	}
+
+	// And it is the holder's to set, nobody else's.
+	if rec := setDueDate(t, db, g, back.ID, b, `{"due_date":"`+earlier+`"}`); rec.Code != 403 {
+		t.Errorf("a housemate setting it returned %d, want 403", rec.Code)
+	}
+}
+
+// Away members are not counted as busy: they are out of the rotation, so a
+// household of three with one away is a household of two for this purpose.
+func TestAllBusyIgnoresAwayMembers(t *testing.T) {
+	db, g, a, b, c, chore, name := threePersonChore(t, "interval")
+
+	setAway(t, db, g, c, nil)
+
+	passOK(t, db, g, theOpenOcc(t, db, g, a, chore.ID).ID, a)
+	handed := theOpenOcc(t, db, g, a, chore.ID)
+	if handed.AssignedTo != b {
+		t.Fatalf("A's pass went to %s, want B: C is away", name(handed.AssignedTo))
+	}
+	// B is the last available member, so B passing closes the round.
+	passOK(t, db, g, handed.ID, b)
+
+	back := theOpenOcc(t, db, g, a, chore.ID)
+	if back.AssignedTo != a {
+		t.Errorf("it went to %s, want A: with C away, A and B are the whole household",
+			name(back.AssignedTo))
+	}
+}
+
+// An as-needed chore has no next date, so there is nothing to default to and
+// nothing to bound. It comes back and waits, which is what it does anyway.
+func TestAllBusyOnAnAsNeededChoreNeedsNoDate(t *testing.T) {
+	db, g, a, b, c, chore, name := threePersonChore(t, "as_needed")
+
+	passOK(t, db, g, theOpenOcc(t, db, g, a, chore.ID).ID, a)
+	passOK(t, db, g, theOpenOcc(t, db, g, a, chore.ID).ID, b)
+	passOK(t, db, g, theOpenOcc(t, db, g, a, chore.ID).ID, c)
+
+	back := theOpenOcc(t, db, g, a, chore.ID)
+	if back.AssignedTo != a {
+		t.Errorf("it went to %s, want A", name(back.AssignedTo))
+	}
+	if back.DueDate != nil {
+		t.Errorf("an as-needed chore came back with a date of %v", back.DueDate)
+	}
+	if rec := setDueDate(t, db, g, back.ID, a, `{"due_date":"2026-12-01T12:00:00Z"}`); rec.Code != 409 {
+		t.Errorf("setting a date on an as-needed chore returned %d, want 409", rec.Code)
 	}
 }

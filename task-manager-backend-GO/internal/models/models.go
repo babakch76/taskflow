@@ -198,6 +198,16 @@ type Occurrence struct {
 	PassedChain   []string `json:"-"`
 	PendingDebts  []string `json:"-"`
 
+	// NeedsDate is set when everybody who could take this chore has passed it,
+	// so it has come back to whoever asked first and they are the one to say
+	// when it will happen.
+	//
+	// Sent **only on the holder's own rows**, and computed per request rather
+	// than stored, because it is a fact about the chain and the chain can
+	// change. Everyone else sees an ordinary standing chore: that a whole
+	// household declined it is between them and the person now holding it.
+	NeedsDate     bool     `json:"needs_date,omitempty"`
+
 	CoveredBy     *string `json:"covered_by,omitempty"`
 	CoveredByName *string `json:"covered_by_name,omitempty"`
 
