@@ -1321,10 +1321,32 @@ private fun TaskCard(
                 // Without this a pass looks like the chore simply left, and the
                 // return looks like a turn that never moved. Both are the rule
                 // working; neither is legible without a sentence.
+                val returned = coveredByName != null && row.isOpen
+                val mine = row.assignedTo != null && row.assignedTo == myUserId
                 val marker = when {
                     passedByMe -> "Next turn comes back to you. " +
                         "${assigneeName ?: "Someone"} is covering this one"
-                    coveredByName != null && row.isOpen -> "Back to you after $coveredByName covered"
+
+                    // Said in the past tense, because the cover has already
+                    // happened. This line used to read "Back to you after X
+                    // covered", which frames a finished event as a pending one
+                    // and reads as though the turn were still on its way back
+                    // when it is already sitting here.
+                    returned && mine ->
+                        "$coveredByName covered your last turn, so it's yours again"
+
+                    // Somebody else's row, so it cannot say "you". It used to:
+                    // the branch above had no ownership test, so every member
+                    // saw "Back to you after maya covered" on the row it
+                    // belonged to, addressed to the wrong person, and maya saw
+                    // herself named in the third person in a sentence aimed at
+                    // her. Whose row it is is already on the cycle line above,
+                    // so this only has to give the reason the rotation did not
+                    // move on.
+                    returned -> assigneeName
+                        ?.let { "$coveredByName covered $it's last turn" }
+                        ?: "$coveredByName covered the last turn"
+
                     else -> null
                 }
                 marker?.let {

@@ -320,6 +320,27 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
     except the screen the away person is actually looking at.
   - **The Board tab counts open rows** (B-11).
   Device-verified throughout; the details are in each commit message.
+- **The return marker said the wrong thing to the wrong person — FIXED**
+  (2026-09-03, reported by Babak). The line under a chore that has come back to
+  you after a cover read **"Back to you after maya covered"**. Two defects, one
+  of which Babak spotted and one which fell out of looking:
+
+  - **Tense.** The cover has already happened, and the turn is already sitting
+    on your board. "Back to you after X covered" frames a finished event as a
+    pending condition, so it reads as though the turn were still on its way.
+    It now reads "maya covered your last turn, so it's yours again".
+  - **No ownership test.** The branch checked only that the occurrence had a
+    `covered_by` and was open, never that it was *yours*. So every member saw
+    the second-person line on somebody else's row: signed in as maya, the board
+    said "Back to you after maya covered" on **demo's** row, addressed to the
+    wrong person and naming maya in the third person in a sentence aimed at
+    her. Other people's rows now read "maya covered demo's last turn", which is
+    the useful half for them: it says why the rotation did not move on to
+    *them*. Whose row it is is already on the line above.
+
+  Verified on the device from both sides, signed in as demo and as maya. The
+  `passedByMe` branch beside it was left alone; its tenses are already right.
+
 - **The screens deck re-shot — DONE** (2026-09-03). Nine slides, 31 screens,
   all captured at 360dp against a running backend after the six v2 UI phases;
   the source screenshots are committed under `screens/` so the deck is
