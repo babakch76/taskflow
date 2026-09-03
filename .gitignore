@@ -40,3 +40,8 @@ desktop.ini
 # Old zipped snapshots of the same source that now lives in this repo.
 *.rar
 *.zip
+
+# Local database copies moved aside while re-seeding the screenshot household.
+# These are scratch snapshots of a dev database, not something anyone should
+# clone; the real backup lives outside the repo.
+.local-db-attic/

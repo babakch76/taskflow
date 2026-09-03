@@ -1,5 +1,14 @@
 // Rebuilds TaskFlow_Screens.pptx from screenshots taken off the real build.
-// Every image in the previous deck was a pre-pivot v1 mock-up; none is reused.
+//
+// Every image is a capture of the running app against a live backend. Nothing
+// here is a mock-up, and nothing is reused from the pre-pivot v1 deck.
+//
+// Re-shot after the v2 UI pass (phases 1 to 6), which changed enough that the
+// previous deck no longer showed the app that exists: the board's row grammar,
+// the two-screen create flow, the busy pass, the starter chores a new household
+// is offered, and the appearance toggle are all new since the last capture.
+//
+// Usage: node tools-build-screens-deck.js <shots-dir> <out.pptx>
 const pptxgen = require("pptxgenjs");
 const path = require("path");
 
@@ -14,12 +23,12 @@ const PAPER = "FFFFFF";
 const CARD = "F4F5FA";
 
 const pres = new pptxgen();
-pres.layout = "LAYOUT_WIDE"; // 13.3 x 7.5 — must be set before any slide
+pres.layout = "LAYOUT_WIDE"; // 13.3 x 7.5 - must be set before any slide
 pres.author = "TaskFlow";
-pres.title = "TaskFlow — screens from the built app";
+pres.title = "TaskFlow - screens from the built app";
 
 const PHONE_H = 5.0;
-const PHONE_W = PHONE_H * (1080 / 2400); // 2.25 — never distort the capture
+const PHONE_W = PHONE_H * (1080 / 2400); // 2.25 - never distort the capture
 const CARD_W = 2.5;
 const CARD_H = 5.4;
 const CARD_Y = 1.3;
@@ -29,20 +38,20 @@ function shot(name) {
   return path.join(SHOTS, name);
 }
 
-// ─── Title ───────────────────────────────────────────────────────────────
+// --- Title ----------------------------------------------------------------
 const title = pres.addSlide();
 title.background = { color: INK };
 title.addText("TaskFlow", {
   isTextBox: true, x: 0.9, y: 1.9, w: 7.2, h: 1.0,
   fontSize: 54, bold: true, color: PAPER, fontFace: "Calibri", margin: 0,
 });
-title.addText("The household chore board — screens from the built app", {
+title.addText("The household chore board, screen by screen", {
   isTextBox: true, x: 0.9, y: 2.95, w: 7.2, h: 0.6,
   fontSize: 20, color: "CADCFC", fontFace: "Calibri", margin: 0,
 });
 title.addText(
-  "Captured on the emulator against a running backend on 2 September 2026. " +
-  "Every screen here is the app as it actually builds and runs — no mock-ups.",
+  "Captured on the emulator at 360dp against a running backend on 3 September 2026, " +
+  "after the v2 UI pass. Every screen here is the app as it actually builds and runs.",
   {
     isTextBox: true, x: 0.9, y: 3.75, w: 6.9, h: 1.0,
     fontSize: 14, color: "9AA0B4", fontFace: "Calibri", margin: 0, lineSpacingMultiple: 1.3,
@@ -53,9 +62,13 @@ title.addImage({
   x: 9.6, y: 0.85, w: PHONE_W + 0.35, h: PHONE_H + 0.78,
   shadow: { type: "outer", angle: 90, offset: 6, blur: 18, color: "000000", opacity: 0.45 },
 });
-title.addNotes("Deck rebuilt for phase 4b. The previous version showed the pre-pivot v1 app.");
+title.addNotes(
+  "Re-shot after v2 UI phases 1-6. The household is seeded: three flatmates, " +
+  "four chores across all three schedule types, three one-off tasks, two " +
+  "completed cycles a week apart, one overdue one-off, one person away.",
+);
 
-// ─── Content slides ──────────────────────────────────────────────────────
+// --- Content slides -------------------------------------------------------
 function contentSlide(heading, standfirst, items) {
   const s = pres.addSlide();
   s.background = { color: PAPER };
@@ -99,32 +112,54 @@ contentSlide(
   "Getting in",
   "One household, so signing in lands straight on its board. The group list is one Back away.",
   [
-    { file: "01-login.png", label: "Sign in", note: "The violet scheme, not the wallpaper's" },
+    { file: "01-login.png", label: "Sign in", note: "The app's violet, not the wallpaper's" },
     { file: "02-register.png", label: "Create an account", note: "Scrolls clear of the keyboard" },
     { file: "03-dashboard.png", label: "My Groups", note: "Reached by Back from the board" },
-    { file: "12-dashboard-menu.png", label: "Dashboard menu", note: "Quiet hours lives here — it is per person" },
+    { file: "13-dashboard-menu.png", label: "The person's menu", note: "Quiet hours and appearance: both per person" },
   ],
 );
 
 contentSlide(
   "The board is the screen",
-  "Yours, Others, Done — grouped by whose it is, not by status. Overdue is amber, never red.",
+  "Yours, Others, Done this cycle. Grouped by whose it is, not by status. Overdue is amber, never red.",
   [
-    { file: "04-board.png", label: "The board", note: "One overdue row in amber; done rows sink" },
-    { file: "05-occurrence-detail.png", label: "A chore, opened", note: "The done-line, the schedule, whose turn" },
-    { file: "07-create-repeats.png", label: "Add — repeats", note: "Schedule and rotation order" },
-    { file: "08-create-onetime.png", label: "Add — one time", note: "Same form, one question decides" },
+    { file: "04-board.png", label: "The board", note: "Three lines a row: what, when, whose" },
+    { file: "05-board-done.png", label: "Done this cycle", note: "Completions sink, with who and when" },
+    { file: "06-occurrence-detail.png", label: "A chore, opened", note: "The done-line, the schedule, whose turn" },
+    { file: "07-chore-history.png", label: "One chore's history", note: "Two dates, no verdict on either" },
+  ],
+);
+
+contentSlide(
+  "Adding a chore asks two questions",
+  "How often, then everything that answer implies. Nothing about days is asked of a one-off.",
+  [
+    { file: "08-create-step1.png", label: "Step 1: how often", note: "Four short answers, no schedule jargon" },
+    { file: "09-create-tooltip.png", label: "The explanation, on ask", note: "Behind a '?', so the choice stays short" },
+    { file: "10-create-step2.png", label: "Step 2: repeating", note: "Interval, then the order of turns" },
+    { file: "12-create-onetime.png", label: "Step 2: one-off", note: "One person, one date, no rotation" },
+  ],
+);
+
+contentSlide(
+  "Changing it, and removing it",
+  "Editing is the same two screens, prefilled. A schedule change re-dates the open turn rather than stranding it.",
+  [
+    { file: "21-edit-step1.png", label: "Edit, prefilled", note: "The one kind it cannot become is explained" },
+    { file: "22-edit-step2.png", label: "The same step 2", note: "Rotation and done-line as they stand" },
+    { file: "23-edit-delete.png", label: "Delete lives here", note: "At the end of editing, not on the row" },
+    { file: "24-delete-confirm.png", label: "What delete costs", note: "Names the history it takes with it" },
   ],
 );
 
 contentSlide(
   "Busy, away, and whose turn",
-  "The only two exits from an assigned chore besides doing it. Neither cancels the turn you owe.",
+  "The only two exits from a turn besides doing it. Neither cancels what you owe.",
   [
-    { file: "14-away-dialog.png", label: "Going away", note: "States the rule before you commit" },
-    { file: "15-away-banner.png", label: "While you are away", note: "Visible on your own board, with a way back" },
-    { file: "16-after-pass.png", label: "After a busy pass", note: "It moves on; it comes back to you next cycle" },
-    { file: "09-members.png", label: "The household", note: "Away is shown, never hidden" },
+    { file: "25-pass-confirm.png", label: "Passing it on", note: "Says who is told, and that nobody else is" },
+    { file: "26-after-pass.png", label: "After the pass", note: "It moves, and it comes back next cycle" },
+    { file: "20-away-dialog.png", label: "Going away", note: "States the rule before you commit" },
+    { file: "16-members.png", label: "The household", note: "Away is shown; a pass never is" },
   ],
 );
 
@@ -132,10 +167,30 @@ contentSlide(
   "What has happened",
   "A record the household can point at. It counts, it does not rank, and it names no one as late.",
   [
-    { file: "06-chore-history.png", label: "One chore's history", note: "Two dates, no verdict on either" },
-    { file: "11-group-history.png", label: "What's been done", note: "Join order, zeroes included, days away noted" },
-    { file: "10-activity.png", label: "Activity", note: "Every group-visible change, in words" },
-    { file: "13-quiet-hours.png", label: "Quiet hours", note: "Held, not dropped — nothing is lost" },
+    { file: "19-group-history.png", label: "What's been done", note: "Counts, zeroes included, days away noted" },
+    { file: "17-activity.png", label: "Activity", note: "Every group-visible change, in words" },
+    { file: "18-group-menu.png", label: "The group's menu", note: "Inviting, the record, and going away" },
+    { file: "14-quiet-hours.png", label: "Quiet hours", note: "Held, not dropped: nothing is lost" },
+  ],
+);
+
+contentSlide(
+  "A household that has just started",
+  "An empty board teaches nothing, so a new group is offered chores to argue with rather than a blank page.",
+  [
+    { file: "28-create-group.png", label: "Naming the household", note: "Two fields, one of them optional" },
+    { file: "29-starters.png", label: "Five to start with", note: "Renameable, because names are local" },
+    { file: "30-starters-deselected.png", label: "Take one off", note: "The count follows what you actually chose" },
+    { file: "31-empty-board.png", label: "Or skip entirely", note: "The empty board says what to do next" },
+  ],
+);
+
+contentSlide(
+  "Light or dark, the household's choice",
+  "One setting per phone. The overdue amber is picked from the theme, so it stays legible in either.",
+  [
+    { file: "15-appearance.png", label: "Appearance", note: "System, light or dark; kept on the device" },
+    { file: "27-dark-board.png", label: "The board in dark", note: "Amber still amber; still nothing red" },
   ],
 );
 
