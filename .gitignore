@@ -45,3 +45,6 @@ desktop.ini
 # These are scratch snapshots of a dev database, not something anyone should
 # clone; the real backup lives outside the repo.
 .local-db-attic/
+
+# Built APKs. Large binaries, and rebuildable from source in one command.
+*.apk
