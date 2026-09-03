@@ -366,6 +366,18 @@ type CreateChoreRequest struct {
 // chore.
 type UpdateChoreRequest struct {
 	Name           *string       `json:"name,omitempty"`
+	// ScheduleType moves a chore between interval, fixed_date and as_needed.
+	//
+	// It was immutable until v2's edit flow, on the reasoning that a chore
+	// which has changed kind is a new chore. Households disagreed: "the bins
+	// moved to Thursdays" and "let's just do the bathroom when it looks bad"
+	// are edits to an existing arrangement, not new arrangements, and the
+	// history belongs to the same chore either way.
+	//
+	// one_off is not reachable from here in either direction. A one-off lives
+	// in the tasks table, so the switch is a different row, not a different
+	// column.
+	ScheduleType   *string       `json:"schedule_type,omitempty"`
 	DoneLine       *string       `json:"done_line,omitempty"`
 	IntervalDays   *int          `json:"interval_days,omitempty"`
 	FixedWeekdays  []int         `json:"fixed_weekdays,omitempty"`

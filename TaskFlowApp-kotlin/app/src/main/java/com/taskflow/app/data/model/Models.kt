@@ -449,12 +449,22 @@ data class UpdateChoreRequest(
     val name: String? = null,
     @SerializedName("done_line")
     val doneLine: String? = null,
+    /**
+     * Moves a chore between interval, fixed_date and as_needed.
+     *
+     * Not one_off in either direction: a one-off is a row in the tasks table,
+     * so that switch is a delete and an add rather than a field.
+     */
+    @SerializedName("schedule_type")
+    val scheduleType: String? = null,
     @SerializedName("interval_days")
     val intervalDays: Int? = null,
     @SerializedName("fixed_weekdays")
     val fixedWeekdays: List<Int>? = null,
     @SerializedName("fixed_month_days")
     val fixedMonthDays: List<Int>? = null,
+    @SerializedName("needed_by_time")
+    val neededByTime: String? = null,
     val rotation: List<String>? = null,
 )
 

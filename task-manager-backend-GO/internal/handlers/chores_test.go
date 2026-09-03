@@ -619,6 +619,162 @@ func TestFixedDateDoneLateLandsOnAFutureSlot(t *testing.T) {
 	}
 }
 
+// ── What an edit does to the turn already on the board ──────────────────────
+//
+// The rules under test: the assignee never moves because of an edit, a changed
+// schedule re-dates the open occurrence from the last completion, and moving to
+// as-needed clears the date entirely.
+
+// Changing the interval re-dates the open occurrence without touching whose it
+// is. Counted from the chore's creation here, since it has never been done.
+func TestEditingTheScheduleRedatesTheOpenOccurrence(t *testing.T) {
+	db := newTestDB(t)
+	owner := newUser(t, db, "owner")
+	mate := newUser(t, db, "mate")
+	groupID := newGroup(t, db, owner, "Flat")
+	addMember(t, db, groupID, mate, "member")
+
+	chore := createChore(t, db, groupID, owner, fmt.Sprintf(`{
+		"name": "Bathroom", "schedule_type": "interval", "interval_days": 30,
+		"rotation": [%q, %q]
+	}`, owner, mate))
+
+	before := openOccurrencesFor(t, db, groupID, owner, chore.ID)[0]
+	if before.DueDate == nil {
+		t.Fatal("the first occurrence has no due date")
+	}
+
+	h := &ChoreHandler{DB: db}
+	rec := httptest.NewRecorder()
+	h.UpdateChore(rec, request("PATCH", "/groups/"+groupID+"/chores/"+chore.ID,
+		`{"interval_days":2}`, owner,
+		map[string]string{"group_id": groupID, "chore_id": chore.ID}))
+	if rec.Code != 200 {
+		t.Fatalf("edit: got %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	after := openOccurrencesFor(t, db, groupID, owner, chore.ID)[0]
+	if after.ID != before.ID {
+		t.Fatalf("the edit replaced the occurrence (%s -> %s); it should re-date the one that is there",
+			before.ID, after.ID)
+	}
+	if after.AssignedTo != before.AssignedTo {
+		t.Errorf("the edit moved the turn from %s to %s; an edit is not a completion",
+			before.AssignedTo, after.AssignedTo)
+	}
+	if after.DueDate == nil {
+		t.Fatal("no due date after the edit")
+	}
+	// Two days from creation, not thirty.
+	want := time.Now().AddDate(0, 0, 2).YearDay()
+	if after.DueDate.In(time.Local).YearDay() != want {
+		t.Errorf("re-dated to %s; expected two days out, under the new interval",
+			after.DueDate.Format(time.RFC3339))
+	}
+}
+
+// A chore can move between the three repeating kinds. Switching to as-needed
+// takes the date off the board row; switching back puts one on.
+func TestSwitchingScheduleTypeClearsAndRestoresTheDate(t *testing.T) {
+	db := newTestDB(t)
+	owner := newUser(t, db, "owner")
+	groupID := newGroup(t, db, owner, "Flat")
+
+	chore := createChore(t, db, groupID, owner, fmt.Sprintf(`{
+		"name": "Bins", "schedule_type": "interval", "interval_days": 3, "rotation": [%q]
+	}`, owner))
+	before := openOccurrencesFor(t, db, groupID, owner, chore.ID)[0]
+
+	h := &ChoreHandler{DB: db}
+	rec := httptest.NewRecorder()
+	h.UpdateChore(rec, request("PATCH", "/groups/"+groupID+"/chores/"+chore.ID,
+		`{"schedule_type":"as_needed"}`, owner,
+		map[string]string{"group_id": groupID, "chore_id": chore.ID}))
+	if rec.Code != 200 {
+		t.Fatalf("switch to as_needed: got %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	asNeeded := openOccurrencesFor(t, db, groupID, owner, chore.ID)[0]
+	if asNeeded.DueDate != nil {
+		t.Errorf("an as-needed occurrence still has a due date: %s", asNeeded.DueDate.Format(time.RFC3339))
+	}
+	if asNeeded.AssignedTo != before.AssignedTo {
+		t.Error("the type switch moved the turn")
+	}
+
+	rec = httptest.NewRecorder()
+	h.UpdateChore(rec, request("PATCH", "/groups/"+groupID+"/chores/"+chore.ID,
+		`{"schedule_type":"interval","interval_days":5}`, owner,
+		map[string]string{"group_id": groupID, "chore_id": chore.ID}))
+	if rec.Code != 200 {
+		t.Fatalf("switch back to interval: got %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	back := openOccurrencesFor(t, db, groupID, owner, chore.ID)[0]
+	if back.DueDate == nil {
+		t.Fatal("switching away from as-needed left the occurrence undated")
+	}
+	if back.AssignedTo != before.AssignedTo {
+		t.Error("switching back moved the turn")
+	}
+}
+
+// A one-off is a different table, so it is not reachable by changing a column.
+func TestScheduleTypeCannotCrossTheOneOffBoundary(t *testing.T) {
+	db := newTestDB(t)
+	owner := newUser(t, db, "owner")
+	groupID := newGroup(t, db, owner, "Flat")
+
+	chore := createChore(t, db, groupID, owner, fmt.Sprintf(`{
+		"name": "Bathroom", "schedule_type": "interval", "interval_days": 3, "rotation": [%q]
+	}`, owner))
+
+	h := &ChoreHandler{DB: db}
+	rec := httptest.NewRecorder()
+	h.UpdateChore(rec, request("PATCH", "/groups/"+groupID+"/chores/"+chore.ID,
+		`{"schedule_type":"one_off"}`, owner,
+		map[string]string{"group_id": groupID, "chore_id": chore.ID}))
+
+	if rec.Code != 400 {
+		t.Fatalf("turning a chore into a one-off: got %d, want 400 (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+// Reordering the rotation says who comes next. It must not move the turn that
+// is already on somebody's row.
+func TestReorderingTheRotationLeavesTheCurrentTurnAlone(t *testing.T) {
+	db := newTestDB(t)
+	a := newUser(t, db, "ann")
+	b := newUser(t, db, "bo")
+	groupID := newGroup(t, db, a, "Flat")
+	addMember(t, db, groupID, b, "member")
+
+	chore := createChore(t, db, groupID, a, fmt.Sprintf(`{
+		"name": "Kitchen", "schedule_type": "interval", "interval_days": 3,
+		"rotation": [%q, %q]
+	}`, a, b))
+	before := openOccurrencesFor(t, db, groupID, a, chore.ID)[0]
+
+	h := &ChoreHandler{DB: db}
+	rec := httptest.NewRecorder()
+	h.UpdateChore(rec, request("PATCH", "/groups/"+groupID+"/chores/"+chore.ID,
+		fmt.Sprintf(`{"rotation":[%q,%q]}`, b, a), a,
+		map[string]string{"group_id": groupID, "chore_id": chore.ID}))
+	if rec.Code != 200 {
+		t.Fatalf("reorder: got %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	after := openOccurrencesFor(t, db, groupID, a, chore.ID)[0]
+	if after.AssignedTo != before.AssignedTo {
+		t.Errorf("reordering moved the open turn from %s to %s; it applies from the next spawn",
+			before.AssignedTo, after.AssignedTo)
+	}
+	if after.DueDate == nil || before.DueDate == nil ||
+		!after.DueDate.Equal(*before.DueDate) {
+		t.Error("reordering changed the due date; only a schedule change should")
+	}
+}
+
 // An as-needed chore keeps exactly one standing occurrence: completing it
 // advances the turn and spawns the next, with no date attached.
 func TestAsNeededKeepsOneStandingOccurrence(t *testing.T) {

@@ -534,10 +534,14 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
         intervalDays: Int?,
         fixedWeekdays: List<Int>?,
         rotation: List<String>?,
+        scheduleType: String? = null,
+        fixedMonthDays: List<Int>? = null,
+        neededByTime: String? = null,
         onResult: (String?) -> Unit = {},
     ) {
         if (name == null && doneLine == null && intervalDays == null &&
-            fixedWeekdays == null && rotation == null
+            fixedWeekdays == null && rotation == null &&
+            scheduleType == null && fixedMonthDays == null && neededByTime == null
         ) {
             onResult(null)
             return
@@ -549,8 +553,11 @@ class GroupDetailViewModel(private val groupId: String) : ViewModel() {
                 UpdateChoreRequest(
                     name = name?.trim(),
                     doneLine = doneLine?.trim(),
+                    scheduleType = scheduleType,
                     intervalDays = intervalDays,
                     fixedWeekdays = fixedWeekdays,
+                    fixedMonthDays = fixedMonthDays,
+                    neededByTime = neededByTime,
                     rotation = rotation,
                 ),
             )

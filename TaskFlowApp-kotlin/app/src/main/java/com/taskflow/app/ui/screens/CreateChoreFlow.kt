@@ -24,6 +24,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.taskflow.app.data.model.Chore
 import com.taskflow.app.data.model.MemberInfo
 import com.taskflow.app.data.model.ScheduleType
 import java.time.DayOfWeek
@@ -79,6 +80,31 @@ data class ChoreDraft(
     val rotating: Boolean get() = kind != null && kind != ChoreKind.ONE_OFF
 }
 
+/**
+ * A stored chore, as the flow would have collected it.
+ *
+ * The inverse of what [CreateChoreFlow] submits, so editing starts from exactly
+ * the state adding would have ended at. Anything the chore has no opinion on
+ * keeps the draft's default, which is why the defaults are chosen to be
+ * harmless rather than clever.
+ */
+fun Chore.toDraft(): ChoreDraft = ChoreDraft(
+    name = name,
+    kind = when (scheduleType) {
+        ScheduleType.INTERVAL -> ChoreKind.INTERVAL
+        ScheduleType.FIXED_DATE -> ChoreKind.FIXED_DATE
+        ScheduleType.AS_NEEDED -> ChoreKind.AS_NEEDED
+        else -> ChoreKind.ONE_OFF
+    },
+    intervalDays = intervalDays ?: 4,
+    byWeekday = fixedMonthDays.isNullOrEmpty(),
+    weekday = fixedWeekdays?.firstOrNull() ?: 2,
+    monthDay = fixedMonthDays?.firstOrNull() ?: 1,
+    neededBy = neededByTime,
+    rotation = rotation,
+    doneLine = doneLine,
+)
+
 /** The interval presets the deck offers, plus a way out of them. */
 private val INTERVAL_PRESETS = listOf(1, 2, 3, 4, 5, 6, 7, 14, 30)
 
@@ -112,8 +138,17 @@ fun CreateChoreFlow(
     serverError: String?,
     onDismiss: () -> Unit,
     onSubmit: (ChoreDraft) -> Unit,
+    /**
+     * The chore being edited, or null when adding. Editing is the same two
+     * screens, prefilled: a household changing "weekly" to "every 3 days" is
+     * answering the same question it answered when the chore was added, and
+     * answering it in a different-shaped form would be a second thing to learn.
+     */
+    initial: ChoreDraft? = null,
+    onDelete: (() -> Unit)? = null,
 ) {
-    var draft by remember { mutableStateOf(ChoreDraft()) }
+    val editing = initial != null
+    var draft by remember(initial) { mutableStateOf(initial ?: ChoreDraft()) }
     var step by remember { mutableIntStateOf(1) }
     var confirmDiscard by remember { mutableStateOf(false) }
     var localError by remember { mutableStateOf<String?>(null) }
@@ -142,7 +177,10 @@ fun CreateChoreFlow(
                         },
                         title = {
                             Column {
-                                Text("New chore", fontWeight = FontWeight.Bold)
+                                Text(
+                                    if (editing) "Edit chore" else "New chore",
+                                    fontWeight = FontWeight.Bold,
+                                )
                                 Text(
                                     text = "Step $step of 2",
                                     style = MaterialTheme.typography.labelSmall,
@@ -199,7 +237,9 @@ fun CreateChoreFlow(
                                 Text(
                                     when {
                                         step == 1 -> "Next"
+                                        submitting && editing -> "Saving…"
                                         submitting -> "Adding…"
+                                        editing -> "Save changes"
                                         else -> "Add chore"
                                     },
                                 )
@@ -226,7 +266,11 @@ fun CreateChoreFlow(
                     }
 
                     if (step == 1) {
-                        StepOne(draft = draft, onDraft = { draft = it })
+                        StepOne(
+                            draft = draft,
+                            lockedKind = initial?.kind,
+                            onDraft = { draft = it },
+                        )
                     } else {
                         StepTwo(
                             draft = draft,
@@ -234,6 +278,21 @@ fun CreateChoreFlow(
                             myUserId = myUserId,
                             onDraft = { draft = it },
                         )
+                        onDelete?.let {
+                            Spacer(Modifier.height(4.dp))
+                            HorizontalDivider()
+                            // Delete lives at the foot of the edit flow and
+                            // nowhere else. On the occurrence sheet the same
+                            // button reads as deleting *this turn*.
+                            OutlinedButton(
+                                onClick = it,
+                                enabled = !submitting,
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.error,
+                                ),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text("Delete chore") }
+                        }
                     }
                 }
             }
@@ -243,8 +302,13 @@ fun CreateChoreFlow(
     if (confirmDiscard) {
         AlertDialog(
             onDismissRequest = { confirmDiscard = false },
-            title = { Text("Discard this chore?") },
-            text = { Text("Nothing has been added to the board yet.") },
+            title = { Text(if (editing) "Discard changes?" else "Discard this chore?") },
+            text = {
+                Text(
+                    if (editing) "Your edits won't be saved."
+                    else "Nothing has been added to the board yet.",
+                )
+            },
             confirmButton = {
                 TextButton(onClick = { confirmDiscard = false; onDismiss() }) { Text("Discard") }
             },
@@ -286,7 +350,18 @@ private fun ChoreDraft.problem(members: List<MemberInfo>): String? = when {
 // ═══════════════════════════════════════════════════════════════
 
 @Composable
-private fun StepOne(draft: ChoreDraft, onDraft: (ChoreDraft) -> Unit) {
+private fun StepOne(
+    draft: ChoreDraft,
+    lockedKind: ChoreKind?,
+    onDraft: (ChoreDraft) -> Unit,
+) {
+    // A one-off lives in the tasks table and a repeating chore in the chores
+    // table, so switching between them is a different row, not a different
+    // answer. The three repeating kinds move among themselves freely.
+    val wasOneOff = lockedKind == ChoreKind.ONE_OFF
+    val kindAllowed = { kind: ChoreKind ->
+        lockedKind == null || (kind == ChoreKind.ONE_OFF) == wasOneOff
+    }
     Text("What's the chore?", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
     OutlinedTextField(
         value = draft.name,
@@ -315,6 +390,7 @@ private fun StepOne(draft: ChoreDraft, onDraft: (ChoreDraft) -> Unit) {
     // days. The schedule types still are not named; the labels just say what
     // the answer *is* instead of describing the situation it comes from.
     KindOption(
+        enabled = kindAllowed(ChoreKind.INTERVAL),
         selected = draft.kind == ChoreKind.INTERVAL,
         title = "Every so many days",
         help = "You pick the number of days. It is counted from the last time it " +
@@ -322,12 +398,14 @@ private fun StepOne(draft: ChoreDraft, onDraft: (ChoreDraft) -> Unit) {
         onClick = { onDraft(draft.copy(kind = ChoreKind.INTERVAL)) },
     )
     KindOption(
+        enabled = kindAllowed(ChoreKind.FIXED_DATE),
         selected = draft.kind == ChoreKind.FIXED_DATE,
         title = "A fixed day of the week or month",
         help = "The calendar decides it. Bin collection on Tuesday, rent on the 1st.",
         onClick = { onDraft(draft.copy(kind = ChoreKind.FIXED_DATE)) },
     )
     KindOption(
+        enabled = kindAllowed(ChoreKind.AS_NEEDED),
         selected = draft.kind == ChoreKind.AS_NEEDED,
         title = "As needed",
         help = "No schedule at all. It sits on the board as someone's turn until " +
@@ -335,12 +413,25 @@ private fun StepOne(draft: ChoreDraft, onDraft: (ChoreDraft) -> Unit) {
         onClick = { onDraft(draft.copy(kind = ChoreKind.AS_NEEDED)) },
     )
     KindOption(
+        enabled = kindAllowed(ChoreKind.ONE_OFF),
         selected = draft.kind == ChoreKind.ONE_OFF,
         title = "A one-time thing",
         help = "A repair, a delivery, a bill to pay once. It is assigned to one " +
             "person and does not come round again.",
         onClick = { onDraft(draft.copy(kind = ChoreKind.ONE_OFF)) },
     )
+
+    if (lockedKind != null) {
+        Text(
+            text = if (wasOneOff) {
+                "To make this repeat, delete it and add it again."
+            } else {
+                "To change this into a one-time thing, delete it and add it again."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
 
 /**
@@ -354,12 +445,19 @@ private fun StepOne(draft: ChoreDraft, onDraft: (ChoreDraft) -> Unit) {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun KindOption(selected: Boolean, title: String, help: String, onClick: () -> Unit) {
+private fun KindOption(
+    selected: Boolean,
+    title: String,
+    help: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+) {
     val tip = rememberTooltipState(isPersistent = true)
     val scope = rememberCoroutineScope()
 
     Surface(
         onClick = onClick,
+        enabled = enabled,
         shape = MaterialTheme.shapes.medium,
         color = if (selected) MaterialTheme.colorScheme.primaryContainer
         else MaterialTheme.colorScheme.surface,
@@ -378,8 +476,11 @@ private fun KindOption(selected: Boolean, title: String, help: String, onClick: 
                 text = title,
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.SemiBold,
-                color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
-                else MaterialTheme.colorScheme.onSurface,
+                color = when {
+                    !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = .38f)
+                    selected -> MaterialTheme.colorScheme.onPrimaryContainer
+                    else -> MaterialTheme.colorScheme.onSurface
+                },
                 modifier = Modifier
                     .weight(1f)
                     .padding(vertical = 10.dp),

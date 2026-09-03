@@ -321,15 +321,38 @@ func (h *ChoreHandler) UpdateChore(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Schedule parameters, validated against the chore's *existing* type —
-	// the category itself is immutable.
+	// Schedule: the type as well as its parameters.
+	newType := existing.ScheduleType
 	newInterval := existing.IntervalDays
 	newWeekdays := existing.FixedWeekdays
 	newMonthDays := existing.FixedMonthDays
 	scheduleTouched := false
 
+	if req.ScheduleType != nil && *req.ScheduleType != existing.ScheduleType {
+		// A one-off is a row in another table. Moving between it and a
+		// rotating chore is a delete and an add, not an update, and pretending
+		// otherwise here would leave the occurrence and the task shapes to be
+		// reconciled by whoever read the code next.
+		if *req.ScheduleType == models.ScheduleOneOff || existing.ScheduleType == models.ScheduleOneOff {
+			jsonError(w, "a one-off cannot become a repeating chore, or the reverse", http.StatusBadRequest)
+			return
+		}
+		switch *req.ScheduleType {
+		case models.ScheduleInterval, models.ScheduleFixedDate, models.ScheduleAsNeeded:
+		default:
+			jsonError(w, "unknown schedule_type", http.StatusBadRequest)
+			return
+		}
+		newType = *req.ScheduleType
+		// The old type's parameters do not survive the move: an as-needed chore
+		// has no interval, and a fixed-date one has no interval either. They
+		// are cleared here and refilled below from whatever the request sent.
+		newInterval, newWeekdays, newMonthDays = nil, nil, nil
+		scheduleTouched = true
+	}
+
 	if req.IntervalDays != nil {
-		if existing.ScheduleType != models.ScheduleInterval {
+		if newType != models.ScheduleInterval {
 			jsonError(w, "interval_days applies only to interval chores", http.StatusBadRequest)
 			return
 		}
@@ -337,7 +360,7 @@ func (h *ChoreHandler) UpdateChore(w http.ResponseWriter, r *http.Request) {
 		scheduleTouched = true
 	}
 	if req.FixedWeekdays != nil || req.FixedMonthDays != nil {
-		if existing.ScheduleType != models.ScheduleFixedDate {
+		if newType != models.ScheduleFixedDate {
 			jsonError(w, "fixed_weekdays and fixed_month_days apply only to fixed_date chores", http.StatusBadRequest)
 			return
 		}
@@ -351,15 +374,16 @@ func (h *ChoreHandler) UpdateChore(w http.ResponseWriter, r *http.Request) {
 		scheduleTouched = true
 	}
 	if scheduleTouched {
-		if err := validateSchedule(existing.ScheduleType, newInterval, newWeekdays, newMonthDays); err != nil {
+		if err := validateSchedule(newType, newInterval, newWeekdays, newMonthDays); err != nil {
 			jsonError(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		setClauses = append(setClauses, "interval_days = ?", "fixed_weekdays = ?", "fixed_month_days = ?")
-		args = append(args, newInterval, encodeInts(newWeekdays), encodeInts(newMonthDays))
+		setClauses = append(setClauses,
+			"schedule_type = ?", "interval_days = ?", "fixed_weekdays = ?", "fixed_month_days = ?")
+		args = append(args, newType, newInterval, encodeInts(newWeekdays), encodeInts(newMonthDays))
 		changed = append(changed, fmt.Sprintf("schedule: %s → %s",
 			describeSchedule(existing.ScheduleType, existing.IntervalDays, existing.FixedWeekdays, existing.FixedMonthDays),
-			describeSchedule(existing.ScheduleType, newInterval, newWeekdays, newMonthDays)))
+			describeSchedule(newType, newInterval, newWeekdays, newMonthDays)))
 	}
 
 	if req.NeededByTime.Present {
@@ -419,9 +443,40 @@ func (h *ChoreHandler) UpdateChore(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Deliberately *not* reassigning the open occurrence. Rotation advances
-		// on completion, never on an edit — moving someone's standing chore off
+		// on completion, never on an edit. Moving someone's standing chore off
 		// their row because the list was reordered would be exactly the
-		// "waiting it out" escape the spec closes.
+		// "waiting it out" escape the spec closes, and a reordering is about
+		// who comes *next*.
+	}
+
+	// What an edit does to the turn that is already on the board.
+	//
+	// The rules, in full, because this is the only place they exist:
+	//
+	//   - The assignee never changes because of an edit. Whose turn it is was
+	//     decided by the rotation when the occurrence was spawned, and an edit
+	//     is not a completion.
+	//   - If the schedule changed, the open occurrence is re-dated under the
+	//     new rule, counted from the last completion, or from the chore's
+	//     creation if it has never been done. That is the same anchor the
+	//     schedule itself uses, so "every 3 days" means the same thing whether
+	//     it was set at creation or ten minutes ago.
+	//   - Moving to as-needed clears the date. Moving away from as-needed sets
+	//     one, from the same anchor.
+	//   - A rotation reorder changes nothing about the current turn; it applies
+	//     from the next spawn.
+	//
+	// A fixed-date chore whose anchor is old can land on a date that has
+	// already passed. That is left alone rather than clamped: rollForwardFixedDates
+	// already exists to walk a lapsed fixed date to the next one, keeping the
+	// same assignee, and it runs on the next read of the board. Clamping here
+	// would be a second rule doing the first one's job.
+	if scheduleTouched {
+		if err := redateOpenOccurrence(tx, choreID, newType, newInterval, newWeekdays, newMonthDays, neededByFor(&req, existing)); err != nil {
+			log.Printf("UpdateChore: redate failed for chore %s: %v", choreID, err)
+			jsonError(w, "internal error", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	// The diff broadcast, per constraint 7 and F2's "Sara changed Kitchen:
@@ -1058,6 +1113,72 @@ func nextDueDate(chore *models.Chore, completed *models.Occurrence, completedAt 
 	default:
 		return nil
 	}
+}
+
+// neededByFor resolves the needed-by time an edit leaves the chore with:
+// whatever the patch set, or what it already had when the patch is silent.
+func neededByFor(req *models.UpdateChoreRequest, existing *models.Chore) *string {
+	if !req.NeededByTime.Present {
+		return existing.NeededByTime
+	}
+	if req.NeededByTime.IsNull {
+		return nil
+	}
+	v := req.NeededByTime.Value
+	return &v
+}
+
+// redateOpenOccurrence re-dates a chore's open occurrence under the schedule as
+// it now stands, without touching who it belongs to.
+//
+// The anchor is the last completion of this chore, or the chore's creation if
+// it has never been completed — the same anchor the schedule uses everywhere
+// else, so an interval means the same thing whether it was set at creation or
+// changed a minute ago.
+//
+// Writes only due_date. It must never touch assigned_to or status: an edit is
+// not a completion, and the turn rule is the only thing allowed to move a turn.
+func redateOpenOccurrence(
+	tx *sql.Tx,
+	choreID, scheduleType string,
+	intervalDays *int,
+	weekdays, monthDays []int,
+	neededBy *string,
+) error {
+	var occurrenceID string
+	err := tx.QueryRow(
+		`SELECT id FROM occurrences WHERE chore_id = ? AND status = 'open' ORDER BY rowid DESC LIMIT 1`,
+		choreID,
+	).Scan(&occurrenceID)
+	if err == sql.ErrNoRows {
+		return nil // nothing on the board to re-date
+	}
+	if err != nil {
+		return err
+	}
+
+	// Two queries rather than one COALESCE, and deliberately so: go-sqlite3
+	// parses a DATETIME column into time.Time from the column's *declared*
+	// type, and wrapping it in COALESCE or MAX() throws that away. The value
+	// then comes back as the raw string and the scan fails. Selecting each
+	// column on its own keeps the type.
+	var anchor time.Time
+	err = tx.QueryRow(
+		`SELECT done_at FROM occurrences
+		 WHERE chore_id = ? AND status = 'done' AND done_at IS NOT NULL
+		 ORDER BY done_at DESC LIMIT 1`,
+		choreID,
+	).Scan(&anchor)
+	if err == sql.ErrNoRows {
+		err = tx.QueryRow(`SELECT created_at FROM chores WHERE id = ?`, choreID).Scan(&anchor)
+	}
+	if err != nil {
+		return err
+	}
+
+	due := firstDueDate(scheduleType, intervalDays, weekdays, monthDays, neededBy, anchor.Local())
+	_, err = tx.Exec(`UPDATE occurrences SET due_date = ? WHERE id = ?`, due, occurrenceID)
+	return err
 }
 
 // ── Loading helpers ─────────────────────────────────────────────────────────

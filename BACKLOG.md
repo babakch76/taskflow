@@ -176,6 +176,38 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
   The deck remains the stimulus that was designed; if the housemate sessions run
   against the app, they test these labels instead.
 
+- **v2 UI phase 4 (edit and delete) — DONE** (2026-09-03). Editing reuses the
+  two-screen flow, prefilled; `EditChoreDialog` is deleted.
+  - **Backend, with tests.** A chore's schedule *type* can now move among
+    interval / fixed_date / as_needed, which it could not: `UpdateChoreRequest`
+    had no `schedule_type` at all. one_off stays unreachable in both directions
+    and returns 400 — a one-off is a row in `tasks`, so that switch is a delete
+    and an add, not a column.
+  - **The one new rule, and it lives in a comment beside the code:** the
+    assignee never changes because of an edit; a changed schedule re-dates the
+    open occurrence from the last completion, or from the chore's creation if
+    it has never been done; moving to as-needed clears the date and moving away
+    from it sets one; a rotation reorder applies from the next spawn only.
+  - A fixed-date chore whose anchor is old can land on a date already past.
+    Left alone rather than clamped: `rollForwardFixedDates` already walks a
+    lapsed fixed date forward keeping the same assignee, and runs on the next
+    board read. A clamp here would be a second rule doing the first one's job.
+  - **A scan bug worth remembering:** the anchor query used
+    `COALESCE(MAX(done_at), created_at)`, and go-sqlite3 parses a DATETIME from
+    the column's *declared* type — which `COALESCE` and `MAX()` throw away. The
+    value came back as a raw string and every edit 500'd. Two plain selects
+    instead.
+  - Screen 1 disables the kinds a chore cannot become and says why. X asks
+    "Discard changes? / Your edits won't be saved." Delete sits at the foot of
+    screen 2 in the edit flow only, reusing F-2's confirm.
+  Four backend tests (re-date keeps the assignee, as-needed clears and restores
+  the date, the one-off boundary is refused, a reorder leaves the current turn
+  alone); full suite green twice. Device-verified: weekly → Fridays sent only
+  `{"fixed_weekdays":[5],"schedule_type":"fixed_date"}`, kept the assignee,
+  re-dated 9 Sep → Fri 4 Sep, and broadcast "Clean the bathroom: schedule:
+  weekly → Fridays"; switching to as-needed cleared the date; X mid-edit
+  discarded and left the name untouched; delete returned 204 and took the row.
+
 - **The board is the screen — DONE** (2026-09-02, UI cleanup phase 3), in four
   commits:
   - **Calendar tab deleted.** It read `state.tasks` only, so it showed the

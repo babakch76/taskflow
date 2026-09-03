@@ -478,23 +478,50 @@ fun GroupDetailScreen(
     }
 
     editChore?.let { chore ->
-        EditChoreDialog(
-            chore = chore,
+        CreateChoreFlow(
             members = state.members,
+            myUserId = myUserId,
             submitting = choreSubmitting,
             serverError = choreError,
             onDismiss = { editChoreId = null; choreError = null },
-            onSave = { name, doneLine, intervalDays, weekdays, rotation ->
+            initial = chore.toDraft(),
+            onDelete = { choreToDelete = chore },
+            // Only what actually changed goes up. Restating an untouched field
+            // would overwrite a concurrent edit to it and would put a change
+            // nobody made into the diff the whole group reads.
+            onSubmit = { draft ->
                 choreSubmitting = true
                 choreError = null
+                val before = chore.toDraft()
+                val typeChanged = draft.kind != before.kind
                 viewModel.updateChore(
-                    chore.id, name, doneLine, intervalDays, weekdays, rotation,
+                    choreId = chore.id,
+                    name = draft.name.trim().takeIf { it != chore.name },
+                    doneLine = draft.doneLine.trim().takeIf { it != chore.doneLine },
+                    // On a type change the new type's parameters always go with
+                    // it: the server clears the old type's columns, so leaving
+                    // these out would produce a chore of the new kind with
+                    // nothing to schedule from.
+                    intervalDays = draft.intervalDays.takeIf {
+                        draft.kind == ChoreKind.INTERVAL &&
+                            (typeChanged || it != before.intervalDays)
+                    },
+                    fixedWeekdays = listOf(draft.weekday).takeIf {
+                        draft.kind == ChoreKind.FIXED_DATE && draft.byWeekday &&
+                            (typeChanged || !before.byWeekday || draft.weekday != before.weekday)
+                    },
+                    rotation = draft.rotation.takeIf { it != before.rotation },
+                    scheduleType = draft.kind?.scheduleType.takeIf { typeChanged },
+                    fixedMonthDays = listOf(draft.monthDay).takeIf {
+                        draft.kind == ChoreKind.FIXED_DATE && !draft.byWeekday &&
+                            (typeChanged || before.byWeekday || draft.monthDay != before.monthDay)
+                    },
+                    neededByTime = draft.neededBy?.takeIf { it != before.neededBy },
                 ) { failure ->
                     choreSubmitting = false
                     if (failure == null) editChoreId = null else choreError = failure
                 }
             },
-            onDelete = { choreToDelete = chore },
         )
     }
 
@@ -2124,250 +2151,11 @@ private fun AwayDialog(
     )
 }
 
-/**
- * Edit a chore — the other half of F4.
- *
- * A done-line that can only be set once is not an agreement, it is a decree.
- * The standards conversation recurs ("is wiping the hob enough?", "weekly is too
- * often"), and this is where the household settles it again.
- *
- * **Open to every member**, deliberately. The spec replaces an approval flow
- * with transparency: anyone may change this, and the whole group is told what
- * changed. The dialog says so before you save, because a change nobody expects
- * to be visible is a change made differently.
- *
- * The schedule *type* is shown but not editable. Switching category would leave
- * the open occurrence holding a due date derived from rules that no longer
- * apply; a chore that has genuinely changed kind is a new chore.
- *
- * Only changed fields are sent — restating an untouched one would clobber a
- * concurrent edit, and would announce a change nobody made.
- */
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun EditChoreDialog(
-    chore: Chore,
-    members: List<MemberInfo>,
-    submitting: Boolean,
-    serverError: String?,
-    onDismiss: () -> Unit,
-    onSave: (
-        name: String?,
-        doneLine: String?,
-        intervalDays: Int?,
-        fixedWeekdays: List<Int>?,
-        rotation: List<String>?,
-    ) -> Unit,
-    onDelete: () -> Unit,
-) {
-    var name by remember(chore.id) { mutableStateOf(chore.name) }
-    var doneLine by remember(chore.id) { mutableStateOf(chore.doneLine) }
-    var intervalText by remember(chore.id) {
-        mutableStateOf(chore.intervalDays?.toString() ?: "7")
-    }
-    var weekday by remember(chore.id) {
-        mutableIntStateOf(chore.fixedWeekdays?.firstOrNull() ?: 2)
-    }
-    val rotation = remember(chore.id) { mutableStateListOf<String>().apply { addAll(chore.rotation) } }
-    var error by remember(chore.id) { mutableStateOf<String?>(null) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Edit chore", fontWeight = FontWeight.Bold) },
-        text = {
-            Column(
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.verticalScroll(rememberScrollState()),
-            ) {
-                val shown = error ?: serverError
-                AnimatedVisibility(visible = shown != null) {
-                    Text(
-                        text = shown ?: "",
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it; error = null },
-                    label = { Text("Name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = doneLine,
-                    onValueChange = { if (it.length <= 140) doneLine = it },
-                    label = { Text("What done means") },
-                    supportingText = { Text("${doneLine.length}/140") },
-                    maxLines = 2,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-
-                when (chore.scheduleType) {
-                    ScheduleType.INTERVAL -> {
-                        Text("How often", style = MaterialTheme.typography.labelMedium)
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Text("Every", style = MaterialTheme.typography.bodyMedium)
-                            OutlinedTextField(
-                                value = intervalText,
-                                onValueChange = {
-                                    intervalText = it.filter { c -> c.isDigit() }.take(3)
-                                    error = null
-                                },
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                modifier = Modifier.width(96.dp),
-                            )
-                            Text(
-                                if (intervalText.toIntOrNull() == 1) "day" else "days",
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                        }
-                    }
-
-                    ScheduleType.FIXED_DATE -> {
-                        Text("Which day", style = MaterialTheme.typography.labelMedium)
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            listOf(
-                                1 to "Mon", 2 to "Tue", 3 to "Wed", 4 to "Thu",
-                                5 to "Fri", 6 to "Sat", 0 to "Sun",
-                            ).forEach { (day, label) ->
-                                FilterChip(
-                                    selected = weekday == day,
-                                    onClick = { weekday = day; error = null },
-                                    label = { Text(label) },
-                                )
-                            }
-                        }
-                    }
-
-                    else -> {
-                        // As-needed and one-off have no schedule to adjust. The
-                        // type is still worth stating, so the absence of a
-                        // control reads as deliberate rather than missing.
-                        Text(
-                            "This chore is ${chore.scheduleWording()}, which can't be changed. " +
-                                "Make a new chore if that's what needs to change.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-
-                Text("Whose turn, in order", style = MaterialTheme.typography.labelMedium)
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    members.forEach { member ->
-                        val position = rotation.indexOf(member.id)
-                        FilterChip(
-                            selected = position >= 0,
-                            onClick = {
-                                if (position >= 0) rotation.remove(member.id)
-                                else rotation.add(member.id)
-                                error = null
-                            },
-                            label = {
-                                // Away is shown wherever a name appears in a
-                                // rotation, per F5. Still selectable: you may
-                                // well want someone in the order for when they
-                                // are back; assignment simply steps over them.
-                                Text(
-                                    buildString {
-                                        if (position >= 0) append("${position + 1}. ")
-                                        append(member.username)
-                                        if (member.away) append(" · away")
-                                    },
-                                )
-                            },
-                        )
-                    }
-                }
-                Text(
-                    "Reordering changes who comes next, not whose turn it is now. " +
-                        "an open chore stays with whoever has it until it's done.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-
-                HorizontalDivider()
-                Text(
-                    "Everyone in the group will see what you changed.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-
-                // Delete lives here rather than on the occurrence sheet: this
-                // is already the "this chore is wrong" screen, and on a single
-                // occurrence the same button would read as deleting that cycle
-                // rather than the whole rotation.
-                OutlinedButton(
-                    onClick = onDelete,
-                    enabled = !submitting,
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error,
-                    ),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Icon(Icons.Default.Delete, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Delete chore")
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    val trimmedName = name.trim()
-                    if (trimmedName.isBlank()) {
-                        error = "Name is required"
-                        return@Button
-                    }
-                    val interval = intervalText.toIntOrNull()
-                    if (chore.scheduleType == ScheduleType.INTERVAL &&
-                        (interval == null || interval !in 1..365)
-                    ) {
-                        error = "How often must be a number of days between 1 and 365"
-                        return@Button
-                    }
-                    if (rotation.isEmpty()) {
-                        error = "Pick at least one person for the rotation"
-                        return@Button
-                    }
-
-                    // Only what actually changed. Sending an untouched field
-                    // would overwrite someone else's concurrent edit to it, and
-                    // would put a change nobody made into the group's diff.
-                    val newRotation = rotation.toList()
-                    onSave(
-                        trimmedName.takeIf { it != chore.name },
-                        doneLine.trim().takeIf { it != chore.doneLine },
-                        interval.takeIf {
-                            chore.scheduleType == ScheduleType.INTERVAL && it != chore.intervalDays
-                        },
-                        listOf(weekday).takeIf {
-                            chore.scheduleType == ScheduleType.FIXED_DATE &&
-                                chore.fixedWeekdays?.firstOrNull() != weekday
-                        },
-                        newRotation.takeIf { it != chore.rotation },
-                    )
-                },
-                enabled = !submitting,
-            ) { Text(if (submitting) "Saving…" else "Save") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !submitting) { Text("Cancel") }
-        },
-    )
-}
+// EditChoreDialog lived here too: a second, differently shaped form for the
+// same facts the create dialog collected. Editing now reuses CreateChoreFlow
+// prefilled, so a household changing "weekly" to "every 3 days" answers the
+// question in the screen it first answered it in, and Delete sits at the foot
+// of that flow rather than in a dialog of its own.
 
 // CreateEntryDialog lived here: one AlertDialog with a "Does this repeat?"
 // segmented control branching into two field sets. It is replaced by
