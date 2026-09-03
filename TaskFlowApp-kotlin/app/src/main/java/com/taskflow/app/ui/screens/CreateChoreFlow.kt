@@ -528,7 +528,12 @@ private fun StepTwo(
     if (draft.rotating) {
         Text("Whose turn does it take?", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         Text(
-            "Everyone here takes it in turn. Drag to change the order.",
+            // The deck's copy said "Drag to change the order", describing a
+            // gesture this picker does not have: it reorders with the arrows,
+            // which TalkBack can also reach. Instructing a gesture that is not
+            // there is worse than diverging from the deck, so the line now just
+            // states the rule and lets the arrows speak for themselves.
+            "Everyone takes a turn, in this order.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
