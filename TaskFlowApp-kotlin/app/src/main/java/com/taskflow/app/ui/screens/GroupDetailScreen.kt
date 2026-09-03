@@ -31,6 +31,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -1746,11 +1747,19 @@ private fun TaskDetailSheet(
  * shown, because red reads as failure and lateness here is not a failure.
  */
 private val AmberOnLight = androidx.compose.ui.graphics.Color(0xFF9A6700)
-private val AmberOnDark = androidx.compose.ui.graphics.Color(0xFFE3B341)
+
+// The deck's dark amber (--pamber / --pamberdot), which is a shade off the one
+// F1 picked by eye. Overdue has to read the same in both appearances, and the
+// deck is where that was decided.
+private val AmberOnDark = androidx.compose.ui.graphics.Color(0xFFE0A534)
 
 @Composable
 private fun overdueColor(): androidx.compose.ui.graphics.Color =
-    if (androidx.compose.foundation.isSystemInDarkTheme()) AmberOnDark else AmberOnLight
+    // Asks the *theme*, not the system. Once appearance can be overridden in
+    // the app, isSystemInDarkTheme() is the wrong question: a phone in light
+    // mode showing the app in dark would have drawn the light amber onto a dark
+    // card, which is the one colour in the app that must stay legible.
+    if (MaterialTheme.colorScheme.surface.luminance() < 0.5f) AmberOnDark else AmberOnLight
 
 // StatusChip lived here. It rendered a task's status as a coloured pill on the
 // board row, which is the "status pill" v2 does away with: a row is open or it

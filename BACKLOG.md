@@ -270,6 +270,31 @@ Status key: **OPEN** · **IN PROGRESS** · **DONE**
   4 days, dated) and Bins (as needed, "Your turn"), nothing else. Skip on a
   second new group added nothing and landed on the empty board.
 
+- **v2 UI phase 6 (appearance) — DONE** (2026-09-03). **System / Light / Dark**
+  in the Dashboard overflow menu, beside quiet hours, because they are the same
+  kind of thing: settings about the person, not the household.
+  - The app's existing dark scheme turned out to *be* the deck's dark palette
+    already — background `#0F1117`, surface `#181A24`, violet `#A78BFA`, green
+    `#34D399` all match. The one difference was the overdue amber, `#E3B341`
+    picked by eye at F1 against the deck's `#E0A534`. Now the deck's.
+  - **A real bug the toggle exposed:** `overdueColor()` asked
+    `isSystemInDarkTheme()`. That was right while the app only followed the
+    system and wrong the moment it could be overridden — a phone in light mode
+    showing the app in dark would have drawn the *light* amber onto a dark
+    card, which is the one colour in the app that has to stay legible. It now
+    asks the theme, via the surface's luminance.
+  - **SharedPreferences, not DataStore.** The prompt says DataStore; it is not a
+    dependency, and one enum written on a radio tap and read once at startup
+    does not need asynchronous storage or a new library. The swipe hint next
+    door is kept the same way. Flagged rather than done silently.
+  - Kept on the device and not on the server: it is a property of this phone in
+    this person's hand, and syncing it would decide the tablet's appearance for
+    them.
+  - `dynamicColor` stays `false`.
+  Device-verified: all three modes; Dark survived a force-stop and relaunch;
+  the overdue row is amber in both appearances (dark amber on dark, even with
+  the phone's own system theme set to light) and nothing is red on either.
+
 - **The board is the screen — DONE** (2026-09-02, UI cleanup phase 3), in four
   commits:
   - **Calendar tab deleted.** It read `state.tasks` only, so it showed the

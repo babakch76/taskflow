@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.MailOutline
@@ -38,6 +39,8 @@ import com.taskflow.app.data.model.InviteInfo
 import com.taskflow.app.data.remote.ApiErrors
 import com.taskflow.app.data.remote.RetrofitClient
 import com.taskflow.app.reminders.ReminderScheduler
+import com.taskflow.app.ui.theme.Appearance
+import com.taskflow.app.ui.theme.AppearanceMode
 import kotlinx.coroutines.launch
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
@@ -78,6 +81,7 @@ fun DashboardScreen(
     var showInvites by remember { mutableStateOf(false) }
     var showJoinByCode by remember { mutableStateOf(false) }
     var showQuietHours by remember { mutableStateOf(false) }
+    var showAppearance by remember { mutableStateOf(false) }
     // The group a first-run starter list is being offered for, if any.
     var starterFor by remember { mutableStateOf<Group?>(null) }
     var starterError by remember { mutableStateOf<String?>(null) }
@@ -187,6 +191,14 @@ fun DashboardScreen(
                             text = { Text("Quiet hours") },
                             leadingIcon = { Icon(Icons.Default.Notifications, null) },
                             onClick = { showMenu = false; showQuietHours = true },
+                        )
+                        // Beside quiet hours because they are the same kind of
+                        // thing: settings about this person rather than about
+                        // the household.
+                        DropdownMenuItem(
+                            text = { Text("Appearance") },
+                            leadingIcon = { Icon(Icons.Default.DarkMode, null) },
+                            onClick = { showMenu = false; showAppearance = true },
                         )
                         HorizontalDivider()
                         DropdownMenuItem(
@@ -307,6 +319,43 @@ fun DashboardScreen(
             onJoin = { code ->
                 showJoinByCode = false
                 viewModel.redeemCode(code)
+            },
+        )
+    }
+
+    if (showAppearance) {
+        val current by Appearance.mode.collectAsState()
+        AlertDialog(
+            onDismissRequest = { showAppearance = false },
+            title = { Text("Appearance") },
+            text = {
+                Column {
+                    AppearanceMode.entries.forEach { mode ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    Appearance.set(context, mode)
+                                    showAppearance = false
+                                }
+                                .padding(vertical = 4.dp),
+                        ) {
+                            RadioButton(
+                                selected = current == mode,
+                                onClick = {
+                                    Appearance.set(context, mode)
+                                    showAppearance = false
+                                },
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(mode.label)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showAppearance = false }) { Text("Done") }
             },
         )
     }

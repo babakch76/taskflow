@@ -17,6 +17,11 @@ import com.taskflow.app.data.remote.RetrofitClient
 import com.taskflow.app.data.remote.SessionManager
 import com.taskflow.app.ui.navigation.AppNavGraph
 import com.taskflow.app.ui.navigation.Routes
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import com.taskflow.app.ui.theme.Appearance
+import com.taskflow.app.ui.theme.AppearanceMode
 import com.taskflow.app.ui.theme.TaskFlowTheme
 
 /**
@@ -38,8 +43,19 @@ class MainActivity : ComponentActivity() {
         // Constructed once in TaskFlowApp.onCreate — never build another one.
         val tokenManager = (application as TaskFlowApp).tokenManager
 
+        // Read before the first frame, so the app does not start in one
+        // appearance and blink into the other.
+        Appearance.load(this)
+
         setContent {
-            TaskFlowTheme {
+            val appearance by Appearance.mode.collectAsState()
+            TaskFlowTheme(
+                darkTheme = when (appearance) {
+                    AppearanceMode.SYSTEM -> isSystemInDarkTheme()
+                    AppearanceMode.LIGHT -> false
+                    AppearanceMode.DARK -> true
+                },
+            ) {
                 val navController = rememberNavController()
 
                 // Observe session expiry — redirect to login on 401
